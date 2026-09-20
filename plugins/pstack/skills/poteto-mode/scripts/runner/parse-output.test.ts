@@ -106,14 +106,14 @@ describe("parseProviderOutput", () => {
           subtype: "init",
           apiKeySource: "login",
           cwd: "/tmp/worktree",
-          session_id: "89cdf315-fe8f-40f7-8dd8-f6eb26c77488",
+          session_id: "00000000-0000-4000-8000-000000000001",
           model: "Cursor Grok 4.6 Extra High Fast",
           permissionMode: "default",
         }),
         JSON.stringify({
           type: "assistant",
           message: { role: "assistant", content: [{ type: "text", text: "OK-2" }] },
-          session_id: "89cdf315-fe8f-40f7-8dd8-f6eb26c77488",
+          session_id: "00000000-0000-4000-8000-000000000001",
         }),
         JSON.stringify({
           type: "result",
@@ -121,7 +121,7 @@ describe("parseProviderOutput", () => {
           duration_ms: 6559,
           is_error: false,
           result: "OK-2",
-          session_id: "89cdf315-fe8f-40f7-8dd8-f6eb26c77488",
+          session_id: "00000000-0000-4000-8000-000000000001",
           request_id: "f3db21b8-1a63-42b3-9b70-852cc8b1d3ee",
           usage: {
             inputTokens: 17978,
@@ -138,7 +138,7 @@ describe("parseProviderOutput", () => {
     expect(parsed).toMatchObject({
       text: "OK-2",
       reportedModel: "Cursor Grok 4.6 Extra High Fast",
-      sessionId: "89cdf315-fe8f-40f7-8dd8-f6eb26c77488",
+      sessionId: "00000000-0000-4000-8000-000000000001",
       usage: {
         inputTokens: 17978,
         outputTokens: 77,
