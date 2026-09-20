@@ -2,6 +2,14 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## Unreleased: cursor joins the model matrix as an on-request family
+
+The runner routes a fourth external provider. `cursor:grok-4.6@<effort>` runs the lane through the Cursor CLI, so an operator who pays for Cursor reaches the same Grok weights without a SuperGrok plan. Cursor is external for both parents. `PARENTS` is unchanged, and the runner still refuses a same-provider call.
+
+Cursor bakes reasoning effort and the fast tier into the model id and reports the served model only as a display name. One typed table holds the id and the exact display name for each selectable effort. The argv builder, the `cursor-agent models` preflight, and model verification all read that table, and verification is `provider-report` with no `pinned-argv` escape. Cursor offers Grok 4.6 at `low`, `medium`, `high`, and `xhigh` only, so `@max` is an `unavailable-model` receipt written before the CLI is called, never a downgrade. Read-only maps to `--mode plan` without `--force`; `isolated-write` maps to `--force`. Both modes pass `--trust` and never `--approve-mcps`. The Cursor CLI has no flag that turns off subagents, plugins, or rules.
+
+The model matrix gains a Setup probe column. The four required families still own the default panel quad and setup's four effort questions. Setup asks about and probes an on-request family only when the loaded sheet or the operator names it, so an operator who does not use Cursor sees no change. No version, manifest, or default role assignment changed.
+
 ## 1.4.1 syncs to Cursor pstack 0.15.1
 
 Open Pstack 1.4.1 tracks Cursor pstack 0.15.1 at `f8abeddd1862dc73704e3d719dd73df0d51b8c71`. Poteto-mode now requires each claim to include its evidence or a measured, inferred, or guess label in the same sentence. Agents also run any check they can run themselves instead of handing that check to the user. No playbook, model, runtime, or dependency changed.
