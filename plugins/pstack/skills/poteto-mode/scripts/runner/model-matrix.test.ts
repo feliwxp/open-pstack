@@ -300,17 +300,31 @@ describe("model matrix", () => {
     }
     expect(cursor.provider).toBe("cursor");
     expect(cursor.setupProbe).toBe("on request");
+    // The row's Model cell is the default speed tier. The fast tier is a
+    // second model name under the same family, not a hidden part of the id.
+    expect(cursor.model).not.toContain("fast");
+    const fastModel = `${cursor.model}-fast`;
     for (const effort of EFFORTS) {
       if (cursor.selectableEfforts.includes(effort)) {
         expect(cursorModel(cursor.model, effort).id).toBe(
+          `cursor-${cursor.model}-${effort}`
+        );
+        expect(cursorModel(fastModel, effort).id).toBe(
           `cursor-${cursor.model}-${effort}-fast`
         );
       } else {
         expect(() => cursorModel(cursor.model, effort)).toThrow(
           `cursor does not offer ${cursor.model} at effort ${effort}`
         );
+        expect(() => cursorModel(fastModel, effort)).toThrow(
+          `cursor does not offer ${fastModel} at effort ${effort}`
+        );
       }
     }
+    const dispatch = readFileSync(DISPATCH_PATH, "utf8");
+    expect(dispatch).toContain(`\`cursor:${cursor.model}@<effort>\``);
+    expect(dispatch).toContain(`\`cursor:${fastModel}@<effort>\``);
+    expect(dispatch).toContain(`\`cursor:${fastModel}@${cursor.defaultEffort}\``);
   });
 
   it("keeps setup's first-run default panel copy aligned with the matrix", () => {

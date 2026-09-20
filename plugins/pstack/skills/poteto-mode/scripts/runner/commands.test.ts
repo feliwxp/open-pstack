@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { invocationCommand } from "./commands.ts";
-import type { RunnerOptions } from "./types.ts";
+import type { Effort, RunnerOptions } from "./types.ts";
 
 function options(overrides: Partial<RunnerOptions> = {}): RunnerOptions {
   return {
@@ -113,7 +113,7 @@ describe("invocationCommand", () => {
     ]);
   });
 
-  it("selects the Cursor fast model id for the requested effort", () => {
+  it("selects the Cursor standard model id for the requested effort", () => {
     const spec = invocationCommand(
       options({ provider: "cursor", model: "grok-4.6", effort: "xhigh" })
     );
@@ -122,7 +122,7 @@ describe("invocationCommand", () => {
     expect(spec.args).toEqual([
       "-p",
       "--model",
-      "cursor-grok-4.6-xhigh-fast",
+      "cursor-grok-4.6-xhigh",
       "--mode",
       "plan",
       "--trust",
@@ -147,7 +147,7 @@ describe("invocationCommand", () => {
     expect(spec.args).toEqual([
       "-p",
       "--model",
-      "cursor-grok-4.6-xhigh-fast",
+      "cursor-grok-4.6-xhigh",
       "--force",
       "--trust",
       "--workspace",
@@ -159,6 +159,31 @@ describe("invocationCommand", () => {
     expect(spec.args).not.toContain("--yolo");
   });
 
+  it("maps each Cursor model name and effort to its own model id", () => {
+    const ids: Record<string, Record<string, string>> = {
+      "grok-4.6": {
+        low: "cursor-grok-4.6-low",
+        medium: "cursor-grok-4.6-medium",
+        high: "cursor-grok-4.6-high",
+        xhigh: "cursor-grok-4.6-xhigh",
+      },
+      "grok-4.6-fast": {
+        low: "cursor-grok-4.6-low-fast",
+        medium: "cursor-grok-4.6-medium-fast",
+        high: "cursor-grok-4.6-high-fast",
+        xhigh: "cursor-grok-4.6-xhigh-fast",
+      },
+    };
+    for (const [model, byEffort] of Object.entries(ids)) {
+      for (const [effort, id] of Object.entries(byEffort)) {
+        const spec = invocationCommand(
+          options({ provider: "cursor", model, effort: effort as Effort })
+        );
+        expect(spec.args[spec.args.indexOf("--model") + 1]).toBe(id);
+      }
+    }
+  });
+
   it("refuses a Cursor pair that the account cannot select", () => {
     expect(() =>
       invocationCommand(
@@ -167,9 +192,19 @@ describe("invocationCommand", () => {
     ).toThrow("cursor does not offer grok-4.6 at effort max");
     expect(() =>
       invocationCommand(
+        options({ provider: "cursor", model: "grok-4.6-fast", effort: "max" })
+      )
+    ).toThrow("cursor does not offer grok-4.6-fast at effort max");
+    expect(() =>
+      invocationCommand(
         options({ provider: "cursor", model: "gpt-5.2", effort: "xhigh" })
       )
     ).toThrow("cursor does not offer gpt-5.2 at effort xhigh");
+    expect(() =>
+      invocationCommand(
+        options({ provider: "cursor", model: "grok-4.6-slow", effort: "xhigh" })
+      )
+    ).toThrow("cursor does not offer grok-4.6-slow at effort xhigh");
   });
 
   it("uses bounded write modes without blanket bypasses", () => {
@@ -233,7 +268,7 @@ describe("invocationCommand", () => {
         model: "grok-4.6",
         flag: (effort: "low" | "medium" | "high") => [
           "--model",
-          `cursor-grok-4.6-${effort}-fast`,
+          `cursor-grok-4.6-${effort}`,
         ],
       },
     ];

@@ -351,6 +351,20 @@ async function waitForGrokPreflightRetry(
   }
 }
 
+// Cursor lists one model per line as "<id> - <Display Name>", and every
+// standard id is a prefix of its fast twin, so a Cursor id counts as listed
+// only when it is a whole listed token.
+function preflightListsModel(
+  provider: Provider,
+  model: string,
+  listing: string
+): boolean {
+  if (provider !== "cursor") return listing.includes(model);
+  return listing
+    .split("\n")
+    .some((line) => line.trim().split(/\s+/)[0] === model);
+}
+
 function preflightPassed(provider: Provider, model: string, result: ProcessResult): boolean {
   if (result.exitCode !== 0 || result.timedOut) return false;
   const combined = `${result.stdout}\n${result.stderr}`;
@@ -370,9 +384,12 @@ function preflightPassed(provider: Provider, model: string, result: ProcessResul
     case "codex":
       return /logged in/i.test(combined);
     case "grok":
-      return /logged in/i.test(combined) && combined.includes(model);
+      return (
+        /logged in/i.test(combined) &&
+        preflightListsModel(provider, model, combined)
+      );
     case "cursor":
-      return combined.includes(model);
+      return preflightListsModel(provider, model, combined);
   }
 }
 
@@ -403,7 +420,8 @@ function preflightFailureStatus(
 ): ReceiptStatus {
   const status = unavailableStatus(value);
   if (status !== "child-failed") return status;
-  return listsRequestedModel(provider) && !value.includes(model)
+  return listsRequestedModel(provider) &&
+      !preflightListsModel(provider, model, value)
     ? "unavailable-model"
     : "unauthenticated";
 }
