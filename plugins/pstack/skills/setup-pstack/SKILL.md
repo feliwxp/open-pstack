@@ -45,7 +45,7 @@ One distinct effort per family is the current value. A family with no non-alias 
 
 Ask exactly four effort questions, one each for Fable, Sol, Grok, and Opus. Name each model, its current or proposed value, and the Selectable efforts from its matrix row. Empty input keeps a current value or accepts the matrix proposal for an unassigned family. On a first run, state the four matrix defaults before asking. On a rerun, state the four parsed values without offering to reset customized role lanes.
 
-A matrix row whose Setup probe cell reads `on request` is optional. Ask its effort question only when the loaded sheet or the operator's request names that family. Cursor is that kind of family today: an operator who pays for Cursor rather than SuperGrok reaches the same Grok weights through `cursor:grok-4.6@<effort>`. Never offer an optional family to an operator who did not name it.
+A matrix row whose Setup probe cell reads `on request` is optional. Ask its effort question only when the loaded sheet or the operator's request names that family. Cursor is that kind of family today: an operator who pays for Cursor rather than SuperGrok reaches the same Grok weights through `cursor:grok-4.6@<effort>`, or through `cursor:grok-4.6-fast@<effort>` for Cursor's higher-priced Fast tier. Both model names belong to the Cursor row, and the row's Model cell names the default. Never offer an optional family to an operator who did not name it.
 
 ### 5. Probe the four requested pairs
 
