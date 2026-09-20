@@ -1,8 +1,10 @@
 import type {
+  Effort,
   NormalizedUsage,
   ParsedOutput,
   Provider,
 } from "./types.ts";
+import { cursorModel } from "./cursor-models.ts";
 import {
   concreteModelMatchesRollingAlias,
   isRollingClaudeAlias,
@@ -28,14 +30,18 @@ function normalizedUsage(value: unknown): NormalizedUsage | null {
   const usage = object(value);
   if (usage === null) return null;
   const result: NormalizedUsage = {
-    inputTokens: finiteNumber(usage.input_tokens),
+    inputTokens: finiteNumber(usage.input_tokens ?? usage.inputTokens),
     cachedInputTokens: finiteNumber(
-      usage.cached_input_tokens ?? usage.cache_read_input_tokens
+      usage.cached_input_tokens
+        ?? usage.cache_read_input_tokens
+        ?? usage.cacheReadTokens
     ),
     cacheCreationInputTokens: finiteNumber(
-      usage.cache_creation_input_tokens ?? usage.cache_write_input_tokens
+      usage.cache_creation_input_tokens
+        ?? usage.cache_write_input_tokens
+        ?? usage.cacheWriteTokens
     ),
-    outputTokens: finiteNumber(usage.output_tokens),
+    outputTokens: finiteNumber(usage.output_tokens ?? usage.outputTokens),
     reasoningTokens: finiteNumber(
       usage.reasoning_tokens ?? usage.reasoning_output_tokens
     ),
@@ -49,19 +55,24 @@ function normalizedUsage(value: unknown): NormalizedUsage | null {
 function modelFromUsage(
   value: unknown,
   provider: Provider,
-  requestedModel: string
+  requestedModel: string,
+  effort: Effort
 ): string | null {
   const usage = object(value);
   if (usage === null) return null;
   const models = Object.keys(usage);
   return models.find((model) =>
-    reportedModelMatches(provider, requestedModel, model)
+    reportedModelMatches(provider, requestedModel, model, effort)
   )
     ?? models[0]
     ?? null;
 }
 
-function parseClaude(stdout: string, requestedModel: string): ParsedOutput {
+function parseClaude(
+  stdout: string,
+  requestedModel: string,
+  effort: Effort
+): ParsedOutput {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout);
@@ -77,14 +88,23 @@ function parseClaude(stdout: string, requestedModel: string): ParsedOutput {
 
   return {
     text,
-    reportedModel: modelFromUsage(value.modelUsage, "claude", requestedModel),
+    reportedModel: modelFromUsage(
+      value.modelUsage,
+      "claude",
+      requestedModel,
+      effort
+    ),
     sessionId: nullableString(value.session_id ?? value.sessionId),
     usage: normalizedUsage(value.usage),
     costUsd: finiteNumber(value.total_cost_usd) ?? null,
   };
 }
 
-function parseGrok(stdout: string, requestedModel: string): ParsedOutput {
+function parseGrok(
+  stdout: string,
+  requestedModel: string,
+  effort: Effort
+): ParsedOutput {
   let result: JsonObject | null = null;
   for (const line of stdout.split("\n")) {
     if (line.trim().length === 0) continue;
@@ -107,10 +127,51 @@ function parseGrok(stdout: string, requestedModel: string): ParsedOutput {
 
   return {
     text,
-    reportedModel: modelFromUsage(result.modelUsage, "grok", requestedModel),
+    reportedModel: modelFromUsage(
+      result.modelUsage,
+      "grok",
+      requestedModel,
+      effort
+    ),
     sessionId: nullableString(result.session_id),
     usage: normalizedUsage(result.usage),
     costUsd: finiteNumber(result.total_cost_usd) ?? null,
+  };
+}
+
+function parseCursor(stdout: string): ParsedOutput {
+  let reportedModel: string | null = null;
+  let result: JsonObject | null = null;
+  for (const line of stdout.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      throw new Error("cursor emitted a non-JSON event");
+    }
+    const event = object(raw);
+    if (event?.type === "system" && event.subtype === "init") {
+      reportedModel = nullableString(event.model) ?? reportedModel;
+    }
+    if (event?.type === "result") result = event;
+  }
+
+  if (result === null) {
+    throw new Error("cursor result did not contain a terminal event");
+  }
+  if (result.is_error === true || result.subtype !== "success") {
+    throw new Error("cursor reported an error result");
+  }
+  const text = nullableString(result.result);
+  if (text === null) throw new Error("cursor result did not contain final text");
+
+  return {
+    text,
+    reportedModel,
+    sessionId: nullableString(result.session_id),
+    usage: normalizedUsage(result.usage),
+    costUsd: null,
   };
 }
 
@@ -161,24 +222,31 @@ export function parseProviderOutput(
   provider: Provider,
   stdout: string,
   stderr: string,
-  requestedModel: string
+  requestedModel: string,
+  effort: Effort
 ): ParsedOutput {
   switch (provider) {
     case "claude":
-      return parseClaude(stdout, requestedModel);
+      return parseClaude(stdout, requestedModel, effort);
     case "codex":
       return parseCodex(stdout);
     case "grok":
-      return parseGrok(stdout, requestedModel);
+      return parseGrok(stdout, requestedModel, effort);
+    case "cursor":
+      return parseCursor(stdout);
   }
 }
 
 export function reportedModelMatches(
   provider: Provider,
   requested: string,
-  reported: string | null
+  reported: string | null,
+  effort: Effort
 ): boolean {
   if (reported === null) return false;
+  if (provider === "cursor") {
+    return reported === cursorModel(requested, effort).displayName;
+  }
   if (provider === "claude" && isRollingClaudeAlias(requested)) {
     return concreteModelMatchesRollingAlias(requested, reported);
   }

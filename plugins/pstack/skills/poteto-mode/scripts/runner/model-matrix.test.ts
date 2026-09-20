@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { cursorModel } from "./cursor-models.ts";
 import { EFFORTS, type Effort } from "./types.ts";
 
 const PLUGIN_ROOT = join(import.meta.dir, "../../../..");
@@ -19,12 +20,14 @@ const MATRIX_HEADER = [
   "Default effort",
   "Selectable efforts",
   "Claude-native agent stem",
+  "Setup probe",
 ] as const;
 
-const FAMILY_ORDER = ["fable", "sol", "grok", "opus"] as const;
-const PROVIDERS = ["claude", "codex", "grok"] as const;
+const FAMILY_ORDER = ["fable", "sol", "grok", "opus", "cursor"] as const;
+const PROVIDERS = ["claude", "codex", "grok", "cursor"] as const;
+const SETUP_PROBES = ["required", "on request"] as const;
 const DESCRIPTOR_RE =
-  /(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max)/g;
+  /(claude|codex|grok|cursor):[a-z0-9.-]+@(low|medium|high|xhigh|max)/g;
 const PANEL_ROLES = [
   "arena runners",
   "arena cross-judge pool",
@@ -65,6 +68,7 @@ interface MatrixRow {
   defaultEffort: Effort;
   selectableEfforts: Effort[];
   claudeNativeAgentStem: string | null;
+  setupProbe: (typeof SETUP_PROBES)[number];
 }
 
 function splitRow(line: string): string[] {
@@ -106,9 +110,9 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
     .slice(start + 1, end)
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"));
-  if (table.length !== 6) {
+  if (table.length !== 2 + FAMILY_ORDER.length) {
     throw new Error(
-      `model matrix must be header, separator, and 4 data rows, got ${table.length}`
+      `model matrix must be header, separator, and ${FAMILY_ORDER.length} data rows, got ${table.length}`
     );
   }
   const header = splitRow(table[0]);
@@ -131,9 +135,13 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
       defaultEffortRaw,
       selectableRaw,
       stemRaw,
+      setupProbeRaw,
     ] = cells;
     if (!(PROVIDERS as readonly string[]).includes(provider)) {
       throw new Error(`invalid provider: ${provider}`);
+    }
+    if (!(SETUP_PROBES as readonly string[]).includes(setupProbeRaw)) {
+      throw new Error(`invalid setup probe: ${setupProbeRaw}`);
     }
     const selectableEfforts = selectableRaw.split(/\s+/).map(asEffort);
     const claudeNativeAgentStem = stemRaw === "-" ? null : stemRaw;
@@ -155,14 +163,15 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
       defaultEffort,
       selectableEfforts,
       claudeNativeAgentStem,
+      setupProbe: setupProbeRaw as MatrixRow["setupProbe"],
     };
   });
 }
 
 function defaultDescriptors(rows: MatrixRow[]): string[] {
-  return rows.map(
-    (row) => `${row.provider}:${row.model}@${row.defaultEffort}`
-  );
+  return rows
+    .filter((row) => row.setupProbe === "required")
+    .map((row) => `${row.provider}:${row.model}@${row.defaultEffort}`);
 }
 
 function parseFrontmatter(text: string): {
@@ -220,7 +229,16 @@ describe("model matrix", () => {
       ["sol", "max"],
       ["grok", "xhigh"],
       ["opus", "xhigh"],
+      ["cursor", "xhigh"],
     ]);
+    expect(rows.map((row) => row.setupProbe)).toEqual([
+      "required",
+      "required",
+      "required",
+      "required",
+      "on request",
+    ]);
+    expect(quad).toHaveLength(4);
     expect(
       rows
         .filter((row) => row.family === "fable" || row.family === "opus")
@@ -275,6 +293,40 @@ describe("model matrix", () => {
     expect(shipped).toEqual([...expected].sort());
   });
 
+  it("binds the Cursor matrix row to the shipped model registry", () => {
+    const cursor = rows.find((row) => row.family === "cursor");
+    if (cursor === undefined) {
+      throw new Error("missing cursor matrix row");
+    }
+    expect(cursor.provider).toBe("cursor");
+    expect(cursor.setupProbe).toBe("on request");
+    // The row's Model cell is the default speed tier. The fast tier is a
+    // second model name under the same family, not a hidden part of the id.
+    expect(cursor.model).not.toContain("fast");
+    const fastModel = `${cursor.model}-fast`;
+    for (const effort of EFFORTS) {
+      if (cursor.selectableEfforts.includes(effort)) {
+        expect(cursorModel(cursor.model, effort).id).toBe(
+          `cursor-${cursor.model}-${effort}`
+        );
+        expect(cursorModel(fastModel, effort).id).toBe(
+          `cursor-${cursor.model}-${effort}-fast`
+        );
+      } else {
+        expect(() => cursorModel(cursor.model, effort)).toThrow(
+          `cursor does not offer ${cursor.model} at effort ${effort}`
+        );
+        expect(() => cursorModel(fastModel, effort)).toThrow(
+          `cursor does not offer ${fastModel} at effort ${effort}`
+        );
+      }
+    }
+    const dispatch = readFileSync(DISPATCH_PATH, "utf8");
+    expect(dispatch).toContain(`\`cursor:${cursor.model}@<effort>\``);
+    expect(dispatch).toContain(`\`cursor:${fastModel}@<effort>\``);
+    expect(dispatch).toContain(`\`cursor:${fastModel}@${cursor.defaultEffort}\``);
+  });
+
   it("keeps setup's first-run default panel copy aligned with the matrix", () => {
     const sheet = firstRunSheet(setup);
     const roles = sheet
@@ -318,6 +370,13 @@ describe("model matrix", () => {
     expect(setup).toContain("Do not probe or write while any inconsistency is unresolved.");
     expect(setup).toContain("A failed probe writes nothing:");
     expect(setup).toContain("Run one probe per family");
+    expect(setup).toContain("Ask exactly four effort questions");
+    expect(setup).toContain(
+      "Ask its effort question only when the loaded sheet or the operator's request names that family."
+    );
+    expect(setup).toContain(
+      "whose Setup probe cell reads `required`"
+    );
     expect(setup).toContain("normalized complete role map from step 2");
     expect(setup).toContain("starts with `claude-fable-` or `claude-opus-`");
     expect(setup).toContain("preserving the provider, effort, role, and lane order");
