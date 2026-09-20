@@ -113,6 +113,65 @@ describe("invocationCommand", () => {
     ]);
   });
 
+  it("selects the Cursor fast model id for the requested effort", () => {
+    const spec = invocationCommand(
+      options({ provider: "cursor", model: "grok-4.6", effort: "xhigh" })
+    );
+    expect(spec.command).toBe("cursor-agent");
+    expect(spec.stdin).toBe("prompt");
+    expect(spec.args).toEqual([
+      "-p",
+      "--model",
+      "cursor-grok-4.6-xhigh-fast",
+      "--mode",
+      "plan",
+      "--trust",
+      "--workspace",
+      "/tmp/worktree",
+      "--output-format",
+      "stream-json",
+    ]);
+    expect(spec.args).not.toContain("--force");
+    expect(spec.args).not.toContain("--approve-mcps");
+  });
+
+  it("gives a Cursor writer force instead of plan mode", () => {
+    const spec = invocationCommand(
+      options({
+        provider: "cursor",
+        model: "grok-4.6",
+        effort: "xhigh",
+        mode: "isolated-write",
+      })
+    );
+    expect(spec.args).toEqual([
+      "-p",
+      "--model",
+      "cursor-grok-4.6-xhigh-fast",
+      "--force",
+      "--trust",
+      "--workspace",
+      "/tmp/worktree",
+      "--output-format",
+      "stream-json",
+    ]);
+    expect(spec.args).not.toContain("plan");
+    expect(spec.args).not.toContain("--yolo");
+  });
+
+  it("refuses a Cursor pair that the account cannot select", () => {
+    expect(() =>
+      invocationCommand(
+        options({ provider: "cursor", model: "grok-4.6", effort: "max" })
+      )
+    ).toThrow("cursor does not offer grok-4.6 at effort max");
+    expect(() =>
+      invocationCommand(
+        options({ provider: "cursor", model: "gpt-5.2", effort: "xhigh" })
+      )
+    ).toThrow("cursor does not offer gpt-5.2 at effort xhigh");
+  });
+
   it("uses bounded write modes without blanket bypasses", () => {
     const codex = invocationCommand(options({ mode: "isolated-write" }));
     expect(codex.args).toEqual(
@@ -167,6 +226,14 @@ describe("invocationCommand", () => {
         flag: (effort: "low" | "medium" | "high") => [
           "--reasoning-effort",
           effort,
+        ],
+      },
+      {
+        provider: "cursor" as const,
+        model: "grok-4.6",
+        flag: (effort: "low" | "medium" | "high") => [
+          "--model",
+          `cursor-grok-4.6-${effort}-fast`,
         ],
       },
     ];
