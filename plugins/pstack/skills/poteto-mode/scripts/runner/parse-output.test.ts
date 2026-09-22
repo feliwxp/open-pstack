@@ -107,7 +107,7 @@ describe("parseProviderOutput", () => {
           apiKeySource: "login",
           cwd: "/tmp/worktree",
           session_id: "00000000-0000-4000-8000-000000000001",
-          model: "Cursor Grok 4.6 Extra High",
+          model: "Grok 4.6 Extra High",
           permissionMode: "default",
         }),
         JSON.stringify({
@@ -137,7 +137,7 @@ describe("parseProviderOutput", () => {
     );
     expect(parsed).toMatchObject({
       text: "OK-2",
-      reportedModel: "Cursor Grok 4.6 Extra High",
+      reportedModel: "Grok 4.6 Extra High",
       sessionId: "00000000-0000-4000-8000-000000000001",
       usage: {
         inputTokens: 17978,
@@ -150,23 +150,23 @@ describe("parseProviderOutput", () => {
   });
 
   it("matches only the Cursor display name registered for the requested model and effort", () => {
-    const standard = "Cursor Grok 4.6 Extra High";
-    const fast = "Cursor Grok 4.6 Extra High Fast";
+    const standard = "Grok 4.6 Extra High";
+    const fast = "Grok 4.6 Extra High Fast";
     expect(reportedModelMatches("cursor", "grok-4.6", standard, "xhigh")).toBe(true);
     expect(reportedModelMatches("cursor", "grok-4.6-fast", fast, "xhigh")).toBe(true);
     // A fast display name is its standard twin plus a word, so only equality
     // tells the two speed tiers apart in either direction.
     expect(reportedModelMatches("cursor", "grok-4.6", fast, "xhigh")).toBe(false);
     expect(reportedModelMatches("cursor", "grok-4.6-fast", standard, "xhigh")).toBe(false);
-    expect(reportedModelMatches("cursor", "grok-4.6", "Cursor Grok 4.6", "high")).toBe(true);
+    expect(reportedModelMatches("cursor", "grok-4.6", "Grok 4.6", "high")).toBe(true);
     expect(
-      reportedModelMatches("cursor", "grok-4.6", "Cursor Grok 4.6 Fast", "high")
+      reportedModelMatches("cursor", "grok-4.6", "Grok 4.6 Fast", "high")
     ).toBe(false);
     expect(
-      reportedModelMatches("cursor", "grok-4.6-fast", "Cursor Grok 4.6 Fast", "high")
+      reportedModelMatches("cursor", "grok-4.6-fast", "Grok 4.6 Fast", "high")
     ).toBe(true);
     expect(
-      reportedModelMatches("cursor", "grok-4.6-fast", "Cursor Grok 4.6", "high")
+      reportedModelMatches("cursor", "grok-4.6-fast", "Grok 4.6", "high")
     ).toBe(false);
     expect(reportedModelMatches("cursor", "grok-4.6", standard, "high")).toBe(false);
     expect(
@@ -218,7 +218,7 @@ describe("parseProviderOutput", () => {
     expect(() =>
       parseProviderOutput(
         "cursor",
-        JSON.stringify({ type: "system", subtype: "init", model: "Cursor Grok 4.6" }),
+        JSON.stringify({ type: "system", subtype: "init", model: "Grok 4.6" }),
         "",
         "grok-4.6",
         "xhigh"
