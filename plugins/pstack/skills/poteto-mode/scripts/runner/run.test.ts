@@ -131,14 +131,14 @@ if (stage === "model" && process.env.FAKE_SELF_SIGNAL) {
 }
 if (name === "cursor-agent") {
   const displayNames = {
-    "cursor-grok-4.6-low": "Cursor Grok 4.6 Low",
-    "cursor-grok-4.6-medium": "Cursor Grok 4.6 Medium",
-    "cursor-grok-4.6-high": "Cursor Grok 4.6",
-    "cursor-grok-4.6-xhigh": "Cursor Grok 4.6 Extra High",
-    "cursor-grok-4.6-low-fast": "Cursor Grok 4.6 Low Fast",
-    "cursor-grok-4.6-medium-fast": "Cursor Grok 4.6 Medium Fast",
-    "cursor-grok-4.6-high-fast": "Cursor Grok 4.6 Fast",
-    "cursor-grok-4.6-xhigh-fast": "Cursor Grok 4.6 Extra High Fast",
+    "cursor-grok-4.6-low": "Grok 4.6 Low",
+    "cursor-grok-4.6-medium": "Grok 4.6 Medium",
+    "cursor-grok-4.6-high": "Grok 4.6",
+    "cursor-grok-4.6-xhigh": "Grok 4.6 Extra High",
+    "cursor-grok-4.6-low-fast": "Grok 4.6 Low Fast",
+    "cursor-grok-4.6-medium-fast": "Grok 4.6 Medium Fast",
+    "cursor-grok-4.6-high-fast": "Grok 4.6 Fast",
+    "cursor-grok-4.6-xhigh-fast": "Grok 4.6 Extra High Fast",
   };
   const served = process.env.FAKE_CURSOR_SERVED_MODEL || displayNames[model];
   console.log(JSON.stringify({type:"system",subtype:"init",apiKeySource:"login",session_id:"u1",model:served,permissionMode:"default"}));
@@ -563,7 +563,7 @@ describe("runLane", () => {
     expect((await runLane(matched)).exitCode).toBe(0);
     expect(receipt(matched.receiptPath)).toMatchObject({
       status: "complete",
-      reportedModel: "Cursor Grok 4.6 Extra High",
+      reportedModel: "Grok 4.6 Extra High",
       modelVerified: true,
       modelEvidence: "provider-report",
       sessionId: "u1",
@@ -584,7 +584,7 @@ describe("runLane", () => {
     expect((await runLane(fast)).exitCode).toBe(0);
     expect(receipt(fast.receiptPath)).toMatchObject({
       status: "complete",
-      reportedModel: "Cursor Grok 4.6 Extra High Fast",
+      reportedModel: "Grok 4.6 Extra High Fast",
       modelVerified: true,
       modelEvidence: "provider-report",
     });
@@ -592,7 +592,7 @@ describe("runLane", () => {
   });
 
   it("refuses a Cursor lane served the other speed tier's display name", async () => {
-    process.env.FAKE_CURSOR_SERVED_MODEL = "Cursor Grok 4.6 Extra High Fast";
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High Fast";
     const mismatched = options("cursor", "cursor-mismatched");
     const result = await runLane(mismatched);
     expect(result.exitCode).toBe(65);
@@ -605,7 +605,7 @@ describe("runLane", () => {
       error: { message: "requested model grok-4.6 was not reported by cursor" },
     });
 
-    process.env.FAKE_CURSOR_SERVED_MODEL = "Cursor Grok 4.6 Extra High";
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High";
     const reversed = {
       ...options("cursor", "cursor-reversed"),
       model: "grok-4.6-fast",

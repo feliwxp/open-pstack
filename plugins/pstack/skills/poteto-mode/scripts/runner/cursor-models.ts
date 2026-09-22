@@ -17,37 +17,37 @@ const CURSOR_MODELS: Readonly<
   "grok-4.6": {
     low: {
       id: "cursor-grok-4.6-low",
-      displayName: "Cursor Grok 4.6 Low",
+      displayName: "Grok 4.6 Low",
     },
     medium: {
       id: "cursor-grok-4.6-medium",
-      displayName: "Cursor Grok 4.6 Medium",
+      displayName: "Grok 4.6 Medium",
     },
     high: {
       id: "cursor-grok-4.6-high",
-      displayName: "Cursor Grok 4.6",
+      displayName: "Grok 4.6",
     },
     xhigh: {
       id: "cursor-grok-4.6-xhigh",
-      displayName: "Cursor Grok 4.6 Extra High",
+      displayName: "Grok 4.6 Extra High",
     },
   },
   "grok-4.6-fast": {
     low: {
       id: "cursor-grok-4.6-low-fast",
-      displayName: "Cursor Grok 4.6 Low Fast",
+      displayName: "Grok 4.6 Low Fast",
     },
     medium: {
       id: "cursor-grok-4.6-medium-fast",
-      displayName: "Cursor Grok 4.6 Medium Fast",
+      displayName: "Grok 4.6 Medium Fast",
     },
     high: {
       id: "cursor-grok-4.6-high-fast",
-      displayName: "Cursor Grok 4.6 Fast",
+      displayName: "Grok 4.6 Fast",
     },
     xhigh: {
       id: "cursor-grok-4.6-xhigh-fast",
-      displayName: "Cursor Grok 4.6 Extra High Fast",
+      displayName: "Grok 4.6 Extra High Fast",
     },
   },
 };
