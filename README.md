@@ -32,7 +32,7 @@ pstack does not ask you to trust an agent on day one. It helps the agent leave e
 
 ## Install
 
-You need a current Claude Code or Codex installation. For the full four-model review, install and sign in to the Claude Code, Codex, and Grok command-line tools. [Bun](https://bun.sh) runs the small local tool that starts models outside the app you are using. You can still use the core workflows with fewer models.
+You need a current Claude Code or Codex installation. For the full three-model review, install and sign in to the Claude Code, Codex, and Grok command-line tools. [Bun](https://bun.sh) runs the small local tool that starts models outside the app you are using. You can still use the core workflows with fewer models.
 
 ### Claude Code
 
@@ -80,7 +80,9 @@ In Codex, ask:
 Use pstack:setup-pstack to configure pstack.
 ```
 
-Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. The current default group uses Fable, GPT-5.6 Sol, Grok 4.6, and Opus.
+Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. Setup first asks for a reasoning budget: unlimited, large, medium, or small. The current default group uses Opus, GPT-5.6 Sol, and Grok 4.7.
+
+A model sheet written before 0.15.3 pins the old default models. Delete those role lines, or delete the sheet, then run setup again. A rerun keeps any role whose model differs from the default. Setup stops on a `grok:grok-4.6` line and offers `grok:grok-4.7` in its place.
 
 An older model sheet starts using the rolling aliases in memory as soon as this release is installed. Run setup once after updating to persist that migration. It replaces versioned Fable and Opus entries while preserving every role assignment and effort selection.
 
@@ -153,7 +155,7 @@ This repository also keeps:
 
 ## Staying close to Lauren's pstack
 
-Open Pstack 1.4.1 tracks pstack 0.15.1 at Cursor commit [`f8abeddd1862dc73704e3d719dd73df0d51b8c71`](https://github.com/cursor/plugins/commit/f8abeddd1862dc73704e3d719dd73df0d51b8c71).
+Open Pstack 1.4.2-cursor.1 tracks pstack 0.15.3 at Cursor commit [`b42effe0aa50f59c693d7e2924714e015e00bf7c`](https://github.com/cursor/plugins/commit/b42effe0aa50f59c693d7e2924714e015e00bf7c).
 
 The two projects have separate version numbers. The pstack version identifies Lauren's upstream content. The Open Pstack version identifies the Claude Code and Codex package built from it.
 
