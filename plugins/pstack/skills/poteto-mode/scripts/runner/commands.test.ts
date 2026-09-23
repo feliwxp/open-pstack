@@ -184,6 +184,41 @@ describe("invocationCommand", () => {
     }
   });
 
+  it("maps Grok 4.7 to Cursor's unprefixed model ids", () => {
+    const ids: Record<string, Record<string, string>> = {
+      "grok-4.7": {
+        low: "grok-4.7-low",
+        medium: "grok-4.7-medium",
+        high: "grok-4.7-high",
+        xhigh: "grok-4.7-xhigh",
+      },
+      "grok-4.7-fast": {
+        low: "grok-4.7-low-fast",
+        medium: "grok-4.7-medium-fast",
+        high: "grok-4.7-high-fast",
+        xhigh: "grok-4.7-xhigh-fast",
+      },
+    };
+    for (const [model, byEffort] of Object.entries(ids)) {
+      for (const [effort, id] of Object.entries(byEffort)) {
+        const spec = invocationCommand(
+          options({ provider: "cursor", model, effort: effort as Effort })
+        );
+        expect(spec.args[spec.args.indexOf("--model") + 1]).toBe(id);
+      }
+    }
+    expect(() =>
+      invocationCommand(
+        options({ provider: "cursor", model: "grok-4.7", effort: "max" })
+      )
+    ).toThrow("cursor does not offer grok-4.7 at effort max");
+    expect(() =>
+      invocationCommand(
+        options({ provider: "cursor", model: "grok-4.7-fast", effort: "max" })
+      )
+    ).toThrow("cursor does not offer grok-4.7-fast at effort max");
+  });
+
   it("refuses a Cursor pair that the account cannot select", () => {
     expect(() =>
       invocationCommand(

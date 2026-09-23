@@ -98,7 +98,9 @@ if (name === "cursor-agent" && args[0] === "models") {
     ? "cursor-grok-4.6-low - Cursor Grok 4.6 Low"
     : process.env.FAKE_CURSOR_ONLY_FAST === "1"
       ? fastRow
-      : "cursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High\\n" + fastRow;
+      : "cursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High\\n" + fastRow +
+        "\\ngrok-4.7-xhigh - Grok 4.7  Extra High" +
+        "\\ngrok-4.7-xhigh-fast - Grok 4.7  Extra High Fast\\u200b\\u200b";
   console.log("Available models\\n\\nauto - Auto (default)\\n" + offered);
   process.exit(0);
 }
@@ -139,6 +141,8 @@ if (name === "cursor-agent") {
     "cursor-grok-4.6-medium-fast": "Grok 4.6 Medium Fast",
     "cursor-grok-4.6-high-fast": "Grok 4.6 Fast",
     "cursor-grok-4.6-xhigh-fast": "Grok 4.6 Extra High Fast",
+    "grok-4.7-xhigh": "Grok 4.7  Extra High",
+    "grok-4.7-xhigh-fast": "Grok 4.7  Extra High Fast\\u200b\\u200b",
   };
   const served = process.env.FAKE_CURSOR_SERVED_MODEL || displayNames[model];
   console.log(JSON.stringify({type:"system",subtype:"init",apiKeySource:"login",session_id:"u1",model:served,permissionMode:"default"}));
@@ -589,6 +593,29 @@ describe("runLane", () => {
       modelEvidence: "provider-report",
     });
     expect(receipt(fast.receiptPath).argv).toContain("cursor-grok-4.6-xhigh-fast");
+  });
+
+  it("verifies a Grok 4.7 lane whose served name has Cursor's odd spacing", async () => {
+    const standard = { ...options("cursor", "cursor-4.7"), model: "grok-4.7" };
+    expect((await runLane(standard)).exitCode).toBe(0);
+    expect(receipt(standard.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.7  Extra High",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+    expect(receipt(standard.receiptPath).argv).toContain("grok-4.7-xhigh");
+    expect(receipt(standard.receiptPath).argv).not.toContain("grok-4.7-xhigh-fast");
+
+    const fast = { ...options("cursor", "cursor-4.7-fast"), model: "grok-4.7-fast" };
+    expect((await runLane(fast)).exitCode).toBe(0);
+    expect(receipt(fast.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.7  Extra High Fast\u200b\u200b",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+    expect(receipt(fast.receiptPath).argv).toContain("grok-4.7-xhigh-fast");
   });
 
   it("refuses a Cursor lane served the other speed tier's display name", async () => {

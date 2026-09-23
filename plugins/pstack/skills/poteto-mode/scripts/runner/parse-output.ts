@@ -4,7 +4,7 @@ import type {
   ParsedOutput,
   Provider,
 } from "./types.ts";
-import { cursorModel } from "./cursor-models.ts";
+import { cursorModel, displayNamesMatch } from "./cursor-models.ts";
 import {
   concreteModelMatchesRollingAlias,
   isRollingClaudeAlias,
@@ -245,7 +245,7 @@ export function reportedModelMatches(
 ): boolean {
   if (reported === null) return false;
   if (provider === "cursor") {
-    return reported === cursorModel(requested, effort).displayName;
+    return displayNamesMatch(reported, cursorModel(requested, effort).displayName);
   }
   if (provider === "claude" && isRollingClaudeAlias(requested)) {
     return concreteModelMatchesRollingAlias(requested, reported);

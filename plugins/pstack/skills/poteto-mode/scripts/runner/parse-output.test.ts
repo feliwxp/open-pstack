@@ -175,6 +175,28 @@ describe("parseProviderOutput", () => {
     expect(reportedModelMatches("cursor", "grok-4.6", null, "xhigh")).toBe(false);
   });
 
+  it("verifies a Grok 4.7 display name through Cursor's doubled space and zero-width tail", () => {
+    // `cursor-agent models` on 2026-09-23 reports these exact strings: two
+    // spaces after "4.7", and two U+200B characters after every Fast name.
+    const standard = "Grok 4.7  Extra High";
+    const fast = "Grok 4.7  Extra High Fast\u200b\u200b";
+    expect(reportedModelMatches("cursor", "grok-4.7", standard, "xhigh")).toBe(true);
+    expect(reportedModelMatches("cursor", "grok-4.7-fast", fast, "xhigh")).toBe(true);
+    expect(
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  High", "high")
+    ).toBe(true);
+    // Normalizing spacing must not merge the speed tiers or the efforts.
+    expect(reportedModelMatches("cursor", "grok-4.7", fast, "xhigh")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7-fast", standard, "xhigh")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7", standard, "high")).toBe(false);
+    expect(
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 ExtraHigh", "xhigh")
+    ).toBe(false);
+    expect(
+      reportedModelMatches("cursor", "grok-4.6", "Grok 4.7  Extra High", "xhigh")
+    ).toBe(false);
+  });
+
   it("selects the requested Claude model when usage includes a side model", () => {
     const parsed = parseProviderOutput(
       "claude",
