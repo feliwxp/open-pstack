@@ -23,7 +23,7 @@ const MATRIX_HEADER = [
   "Setup probe",
 ] as const;
 
-const FAMILY_ORDER = ["fable", "sol", "grok", "opus", "cursor"] as const;
+const FAMILY_ORDER = ["opus", "sol", "grok", "fable", "cursor"] as const;
 const PROVIDERS = ["claude", "codex", "grok", "cursor"] as const;
 const SETUP_PROBES = ["required", "on request"] as const;
 const DESCRIPTOR_RE =
@@ -54,8 +54,8 @@ const SHEET_ROLES = [
 const SETUP_SECTION_ORDER = [
   "### 2. Load current state",
   "### 3. Parse per-family efforts",
-  "### 4. Collect one requested effort per family",
-  "### 5. Probe the four requested pairs",
+  "### 4. Ask for a budget, then one requested effort per family",
+  "### 5. Probe the three requested pairs",
   "### 6. Render, preserving role families",
   "### 7. Confirm and commit",
 ] as const;
@@ -209,7 +209,7 @@ function firstRunSheet(setup: string): string {
 describe("model matrix", () => {
   const rows = parseModelMatrix(readFileSync(DISPATCH_PATH, "utf8"));
   const setup = readFileSync(SETUP_PATH, "utf8");
-  const quad = defaultDescriptors(rows);
+  const panel = defaultDescriptors(rows);
 
   it("owns the effort universe and first-run defaults", () => {
     expect([...EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -225,27 +225,31 @@ describe("model matrix", () => {
     expect(
       rows.map((row) => [row.family, row.defaultEffort])
     ).toEqual([
-      ["fable", "max"],
+      ["opus", "max"],
       ["sol", "max"],
       ["grok", "xhigh"],
-      ["opus", "xhigh"],
+      ["fable", "max"],
       ["cursor", "xhigh"],
     ]);
     expect(rows.map((row) => row.setupProbe)).toEqual([
       "required",
       "required",
       "required",
-      "required",
+      "on request",
       "on request",
     ]);
-    expect(quad).toHaveLength(4);
+    expect(panel).toEqual([
+      "claude:opus@max",
+      "codex:gpt-5.6-sol@max",
+      "grok:grok-4.7@xhigh",
+    ]);
     expect(
       rows
         .filter((row) => row.family === "fable" || row.family === "opus")
         .map((row) => [row.family, row.model])
     ).toEqual([
-      ["fable", "fable"],
       ["opus", "opus"],
+      ["fable", "fable"],
     ]);
   });
 
@@ -307,10 +311,10 @@ describe("model matrix", () => {
     for (const effort of EFFORTS) {
       if (cursor.selectableEfforts.includes(effort)) {
         expect(cursorModel(cursor.model, effort).id).toBe(
-          `cursor-${cursor.model}-${effort}`
+          `${cursor.model}-${effort}`
         );
         expect(cursorModel(fastModel, effort).id).toBe(
-          `cursor-${cursor.model}-${effort}-fast`
+          `${cursor.model}-${effort}-fast`
         );
       } else {
         expect(() => cursorModel(cursor.model, effort)).toThrow(
@@ -329,9 +333,10 @@ describe("model matrix", () => {
 
   it("keeps setup's first-run default panel copy aligned with the matrix", () => {
     const sheet = firstRunSheet(setup);
+    expect(sheet).toContain("\nbudget: unlimited (max)\n");
     const roles = sheet
       .split("\n")
-      .filter((line) => line.includes(": "))
+      .filter((line) => line.includes(": ") && !line.startsWith("budget: "))
       .map((line) => line.slice(0, line.indexOf(": ")));
     expect(roles).toEqual([...SHEET_ROLES]);
     const byFamily = new Map<string, MatrixRow>(
@@ -347,7 +352,7 @@ describe("model matrix", () => {
       }
       expect(effort).toBe(row.defaultEffort);
     }
-    const expectedPanel = quad.join(", ");
+    const expectedPanel = panel.join(", ");
     for (const role of PANEL_ROLES) {
       const line = sheet
         .split("\n")
@@ -370,7 +375,15 @@ describe("model matrix", () => {
     expect(setup).toContain("Do not probe or write while any inconsistency is unresolved.");
     expect(setup).toContain("A failed probe writes nothing:");
     expect(setup).toContain("Run one probe per family");
-    expect(setup).toContain("Ask exactly four effort questions");
+    expect(setup).toContain("Ask exactly three effort questions");
+    for (const label of [
+      "`unlimited — keep max`",
+      "`large — xhigh reasoning`",
+      "`medium — high reasoning`",
+      "`small — medium reasoning`",
+    ]) {
+      expect(setup).toContain(label);
+    }
     expect(setup).toContain(
       "Ask its effort question only when the loaded sheet or the operator's request names that family."
     );
