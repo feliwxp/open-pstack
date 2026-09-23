@@ -175,25 +175,35 @@ describe("parseProviderOutput", () => {
     expect(reportedModelMatches("cursor", "grok-4.6", null, "xhigh")).toBe(false);
   });
 
-  it("verifies a Grok 4.7 display name through Cursor's doubled space and zero-width tail", () => {
-    // `cursor-agent models` on 2026-09-23 reports these exact strings: two
-    // spaces after "4.7", and two U+200B characters after every Fast name.
-    const standard = "Grok 4.7  Extra High";
-    const fast = "Grok 4.7  Extra High Fast\u200b\u200b";
-    expect(reportedModelMatches("cursor", "grok-4.7", standard, "xhigh")).toBe(true);
+  it("verifies Cursor's Grok 4.7 stream names through padding and zero-width tails", () => {
+    // Cursor's stream reported these for the standard ids on 2026-09-23.
+    expect(
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K Extra High", "xhigh")
+    ).toBe(true);
+    expect(reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K High", "high")).toBe(true);
+    // `cursor-agent models` pads Grok 4.7 names with a double space and ends
+    // every Fast name with two U+200B characters.
+    const fast = "Grok 4.7 256K  Extra High Fast\u200b\u200b";
     expect(reportedModelMatches("cursor", "grok-4.7-fast", fast, "xhigh")).toBe(true);
     expect(
-      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  High", "high")
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K  Extra High\u200b\u200b", "xhigh")
     ).toBe(true);
-    // Normalizing spacing must not merge the speed tiers or the efforts.
+    // Normalizing spacing must not merge speed tiers, efforts, or a missing word.
     expect(reportedModelMatches("cursor", "grok-4.7", fast, "xhigh")).toBe(false);
-    expect(reportedModelMatches("cursor", "grok-4.7-fast", standard, "xhigh")).toBe(false);
-    expect(reportedModelMatches("cursor", "grok-4.7", standard, "high")).toBe(false);
     expect(
-      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 ExtraHigh", "xhigh")
+      reportedModelMatches("cursor", "grok-4.7-fast", "Grok 4.7 256K Extra High", "xhigh")
     ).toBe(false);
     expect(
-      reportedModelMatches("cursor", "grok-4.6", "Grok 4.7  Extra High", "xhigh")
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K Extra High", "high")
+    ).toBe(false);
+    expect(
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  Extra High", "xhigh")
+    ).toBe(false);
+    expect(
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K ExtraHigh", "xhigh")
+    ).toBe(false);
+    expect(
+      reportedModelMatches("cursor", "grok-4.6", "Grok 4.7 256K Extra High", "xhigh")
     ).toBe(false);
   });
 

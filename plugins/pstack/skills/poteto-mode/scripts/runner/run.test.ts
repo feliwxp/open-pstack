@@ -141,8 +141,8 @@ if (name === "cursor-agent") {
     "cursor-grok-4.6-medium-fast": "Grok 4.6 Medium Fast",
     "cursor-grok-4.6-high-fast": "Grok 4.6 Fast",
     "cursor-grok-4.6-xhigh-fast": "Grok 4.6 Extra High Fast",
-    "grok-4.7-xhigh": "Grok 4.7  Extra High",
-    "grok-4.7-xhigh-fast": "Grok 4.7  Extra High Fast\\u200b\\u200b",
+    "grok-4.7-xhigh": "Grok 4.7 256K Extra High",
+    "grok-4.7-xhigh-fast": "Grok 4.7 256K  Extra High Fast\\u200b\\u200b",
   };
   const served = process.env.FAKE_CURSOR_SERVED_MODEL || displayNames[model];
   console.log(JSON.stringify({type:"system",subtype:"init",apiKeySource:"login",session_id:"u1",model:served,permissionMode:"default"}));
@@ -600,7 +600,7 @@ describe("runLane", () => {
     expect((await runLane(standard)).exitCode).toBe(0);
     expect(receipt(standard.receiptPath)).toMatchObject({
       status: "complete",
-      reportedModel: "Grok 4.7  Extra High",
+      reportedModel: "Grok 4.7 256K Extra High",
       modelVerified: true,
       modelEvidence: "provider-report",
     });
@@ -611,7 +611,7 @@ describe("runLane", () => {
     expect((await runLane(fast)).exitCode).toBe(0);
     expect(receipt(fast.receiptPath)).toMatchObject({
       status: "complete",
-      reportedModel: "Grok 4.7  Extra High Fast\u200b\u200b",
+      reportedModel: "Grok 4.7 256K  Extra High Fast\u200b\u200b",
       modelVerified: true,
       modelEvidence: "provider-report",
     });

@@ -11,7 +11,12 @@ export interface CursorModel {
 // every selectable row. The portable model name carries the speed tier: Cursor
 // bills its Fast ids at a higher token rate, and a background lane gains
 // nothing from that priority. Cursor offers no Grok row above xhigh. Grok 4.7
-// ids drop the `cursor-` prefix that Grok 4.6 ids carry. Display names are
+// ids drop the `cursor-` prefix that Grok 4.6 ids carry. Display names are the
+// ones Cursor's stream reports, which differ from `cursor-agent models`: the
+// listing leaves Grok 4.7's "256K" slot blank. The four standard names were
+// observed on 2026-09-23. The Fast names are the standard name plus " Fast",
+// as the listing shows; they were not run live because Fast bills at a higher
+// rate, so a wrong guess fails its lane loudly as malformed-output. Names are
 // stored normalized; `displayNamesMatch` owns the comparison.
 const CURSOR_MODELS: Readonly<
   Record<string, Readonly<Partial<Record<Effort, CursorModel>>>>
@@ -19,37 +24,37 @@ const CURSOR_MODELS: Readonly<
   "grok-4.7": {
     low: {
       id: "grok-4.7-low",
-      displayName: "Grok 4.7 Low",
+      displayName: "Grok 4.7 256K Low",
     },
     medium: {
       id: "grok-4.7-medium",
-      displayName: "Grok 4.7 Medium",
+      displayName: "Grok 4.7 256K Medium",
     },
     high: {
       id: "grok-4.7-high",
-      displayName: "Grok 4.7 High",
+      displayName: "Grok 4.7 256K High",
     },
     xhigh: {
       id: "grok-4.7-xhigh",
-      displayName: "Grok 4.7 Extra High",
+      displayName: "Grok 4.7 256K Extra High",
     },
   },
   "grok-4.7-fast": {
     low: {
       id: "grok-4.7-low-fast",
-      displayName: "Grok 4.7 Low Fast",
+      displayName: "Grok 4.7 256K Low Fast",
     },
     medium: {
       id: "grok-4.7-medium-fast",
-      displayName: "Grok 4.7 Medium Fast",
+      displayName: "Grok 4.7 256K Medium Fast",
     },
     high: {
       id: "grok-4.7-high-fast",
-      displayName: "Grok 4.7 High Fast",
+      displayName: "Grok 4.7 256K High Fast",
     },
     xhigh: {
       id: "grok-4.7-xhigh-fast",
-      displayName: "Grok 4.7 Extra High Fast",
+      displayName: "Grok 4.7 256K Extra High Fast",
     },
   },
   "grok-4.6": {
@@ -90,10 +95,10 @@ const CURSOR_MODELS: Readonly<
   },
 };
 
-// Cursor pads some display names: two spaces after "Grok 4.7", and two U+200B
-// characters after every Grok 4.7 Fast name. Strip zero-width characters,
-// collapse whitespace runs, and trim, so spacing never decides a match and
-// every word still does.
+// Cursor pads some Grok 4.7 names with a double space, and its listing ends
+// every Grok 4.7 Fast name with two U+200B characters. Strip zero-width
+// characters, collapse whitespace runs, and trim, so padding never decides a
+// match and every word still does.
 function normalizedDisplayName(name: string): string {
   return name.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").replace(/\s+/g, " ").trim();
 }
