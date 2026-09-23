@@ -351,33 +351,35 @@ else
   note "ok: routed skills stay model-invocable"
 fi
 
-sol_descriptor="$(awk -F '|' '
-  $2 ~ /^[[:space:]]*sol[[:space:]]*$/ {
+# Upstream 0.15.3 puts every code delegate on Grok. Open Pstack follows it,
+# so the solo code roles must name the grok matrix row, not a hand-copied pin.
+grok_descriptor="$(awk -F '|' '
+  $2 ~ /^[[:space:]]*grok[[:space:]]*$/ {
     for (i = 4; i <= 6; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
     print $4 ":" $5 "@" $6
   }
 ' "$dispatch")"
 solo_code_bad=""
-if [ -z "$sol_descriptor" ]; then
-  solo_code_bad="could not read the sol row from $dispatch"$'\n'
+if [ -z "$grok_descriptor" ]; then
+  solo_code_bad="could not read the grok row from $dispatch"$'\n'
 fi
 for role in bug-fix perf-issue hillclimb; do
   setup_descriptor="$(sed -n "s/^${role}: //p" "$setup")"
-  if [ "$setup_descriptor" != "$sol_descriptor" ]; then
-    solo_code_bad="${solo_code_bad}${setup} ${role}: [${setup_descriptor}] != [${sol_descriptor}]"$'\n'
+  if [ "$setup_descriptor" != "$grok_descriptor" ]; then
+    solo_code_bad="${solo_code_bad}${setup} ${role}: [${setup_descriptor}] != [${grok_descriptor}]"$'\n'
   fi
   role_playbook="$plugin/skills/poteto-mode/playbooks/$role.md"
   playbook_descriptor="$(sed -n 's/.*default `\([^`]*\)`.*/\1/p' "$role_playbook")"
-  if [ "$playbook_descriptor" != "$sol_descriptor" ]; then
-    solo_code_bad="${solo_code_bad}${role_playbook}: [${playbook_descriptor}] != [${sol_descriptor}]"$'\n'
+  if [ "$playbook_descriptor" != "$grok_descriptor" ]; then
+    solo_code_bad="${solo_code_bad}${role_playbook}: [${playbook_descriptor}] != [${grok_descriptor}]"$'\n'
   fi
 done
 if [ -n "$solo_code_bad" ]; then
-  note "FAIL: solo code roles must use the sol row:"
+  note "FAIL: solo code roles must use the grok row:"
   note "$solo_code_bad"
   fail=1
 else
-  note "ok: solo code roles stay on the sol row ($sol_descriptor)"
+  note "ok: solo code roles follow upstream onto the grok row ($grok_descriptor)"
 fi
 
 codex_manifest="$plugin/.codex-plugin/plugin.json"
