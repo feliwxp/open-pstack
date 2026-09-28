@@ -427,3 +427,151 @@ describe("model matrix", () => {
     expect(normalization).toContain("runner rejects a missed Fable or Opus version pin");
   });
 });
+
+// The owner's Stack 7 sheet (2026-09-23): combined Why and Reflect lines and
+// Cursor-routed Grok. Upstream 0.15.5 names those lines separately and falls
+// back by `claude-`/`gpt-`/`grok-` prefix, which would demote every cursor entry.
+const OWNER_SHEET = `feature, refactoring: cursor:grok-4.7@xhigh
+bug-fix: cursor:grok-4.7@xhigh
+perf-issue: cursor:grok-4.7@xhigh
+hillclimb: cursor:grok-4.7@xhigh
+judgment and prose: claude:opus@max
+hardest tasks: claude:opus@max
+how explorer: cursor:grok-4.7@xhigh
+how explainer: claude:opus@max
+why investigators, synthesizer: inherit-parent
+reflect tooling, judgment, divergent, synthesizer: inherit-parent
+arena runners: claude:opus@max, cursor:grok-4.7@xhigh
+arena cross-judge pool: cursor:grok-4.7@xhigh, claude:opus@max
+swarm workers: cursor:grok-4.7@xhigh
+architect runners: claude:opus@max, cursor:grok-4.7@xhigh
+interrogate reviewers: claude:opus@max, cursor:grok-4.7@xhigh
+`;
+
+const ROUTED_SKILL_LINES: Record<string, string[]> = {
+  how: ["how explorer", "how explainer"],
+  why: ["why investigators, synthesizer"],
+  reflect: ["reflect tooling, judgment, divergent, synthesizer"],
+  arena: ["arena runners", "arena cross-judge pool"],
+  architect: ["architect runners", "arena runners"],
+  interrogate: ["interrogate reviewers"],
+  swarm: ["swarm workers"],
+};
+
+const ALIASES = ["inherit-parent", "auto"] as const;
+
+function parseSheet(text: string): Map<string, string[]> {
+  const roles = new Map<string, string[]>();
+  for (const line of text.split("\n")) {
+    const idx = line.indexOf(": ");
+    if (idx < 0 || line.startsWith("budget: ")) {
+      continue;
+    }
+    const role = line.slice(0, idx);
+    if (roles.has(role)) {
+      throw new Error(`duplicate sheet role: ${role}`);
+    }
+    roles.set(role, line.slice(idx + 2).split(", "));
+  }
+  return roles;
+}
+
+function resolveEntry(entry: string, rows: MatrixRow[]): string {
+  if ((ALIASES as readonly string[]).includes(entry)) {
+    return entry;
+  }
+  const match = entry.match(/^([a-z]+):([a-z0-9.-]+)@([a-z]+)$/);
+  if (match === null) {
+    throw new Error(`not a provider:model@effort descriptor: ${entry}`);
+  }
+  const [, provider, model, effort] = match;
+  const row = rows.find(
+    (candidate) =>
+      candidate.provider === provider &&
+      (candidate.model === model ||
+        (provider === "cursor" && model === `${candidate.model}-fast`))
+  );
+  if (row === undefined) {
+    throw new Error(`no matrix family for ${entry}`);
+  }
+  if (!row.selectableEfforts.includes(asEffort(effort))) {
+    throw new Error(`${entry}: ${effort} is not selectable for ${row.family}`);
+  }
+  return row.family;
+}
+
+function citedLines(text: string): string[] {
+  const cited = new Set<string>();
+  for (const m of text.matchAll(/the `([^`]+)` line/g)) {
+    cited.add(m[1]);
+  }
+  for (const m of text.matchAll(/^\| \w+ \| `([^`]+)` \|/gm)) {
+    cited.add(m[1]);
+  }
+  return [...cited].sort();
+}
+
+describe("routed skills read the owner's model sheet", () => {
+  const rows = parseModelMatrix(readFileSync(DISPATCH_PATH, "utf8"));
+  const setup = readFileSync(SETUP_PATH, "utf8");
+  const owner = parseSheet(OWNER_SHEET);
+  const skill = (name: string) =>
+    readFileSync(join(PLUGIN_ROOT, "skills", name, "SKILL.md"), "utf8");
+
+  it("keeps every owner line in setup's role map, so setup neither drops nor rejects one", () => {
+    expect([...owner.keys()]).toEqual([...parseSheet(firstRunSheet(setup)).keys()]);
+    const retired = [...setup.matchAll(/`([^`]+)` is the one retired role/g)].map(
+      (m) => m[1]
+    );
+    expect(retired).toEqual(["how critics"]);
+    for (const role of retired) {
+      expect(owner.has(role)).toBe(false);
+    }
+  });
+
+  it("resolves every owner entry, cursor included, to its matrix family", () => {
+    const families = new Map<string, string[]>();
+    for (const [role, entries] of owner) {
+      families.set(role, entries.map((entry) => resolveEntry(entry, rows)));
+    }
+    expect(families.get("swarm workers")).toEqual(["cursor"]);
+    expect(families.get("arena runners")).toEqual(["opus", "cursor"]);
+    expect(families.get("why investigators, synthesizer")).toEqual(["inherit-parent"]);
+  });
+
+  it("names only lines the owner's sheet carries, so no combined line reaches a default", () => {
+    for (const [name, expected] of Object.entries(ROUTED_SKILL_LINES)) {
+      const cited = citedLines(skill(name));
+      expect({ name, cited }).toEqual({ name, cited: [...expected].sort() });
+      for (const line of cited) {
+        expect({ name, line, present: owner.has(line) }).toEqual({
+          name,
+          line,
+          present: true,
+        });
+      }
+    }
+    const poteto = skill("poteto-mode");
+    for (const role of [
+      "feature, refactoring",
+      "bug-fix",
+      "perf-issue",
+      "hillclimb",
+      "hardest tasks",
+      "judgment and prose",
+    ]) {
+      expect(poteto).toContain(`\`${role}\``);
+      expect(owner.has(role)).toBe(true);
+    }
+  });
+
+  it("never moves a configured entry to a default by its model-name prefix", () => {
+    for (const name of readdirSync(join(PLUGIN_ROOT, "skills"))) {
+      const text = skill(name);
+      expect({ name, prefixFallback: /Families go by prefix|its family's default|table default of its family/.test(text) }).toEqual({
+        name,
+        prefixFallback: false,
+      });
+    }
+  });
+});

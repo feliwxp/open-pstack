@@ -8,11 +8,11 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `b42effe0aa50f59c693d7e2924714e015e00bf7c` |
-| Upstream version | `0.15.3` |
-| open-pstack version | `1.4.2-cursor.1` |
+| Commit | `12d587dfb20741cafc376c42c696c5f6e2a64487` |
+| Upstream version | `0.15.5` |
+| open-pstack version | `1.4.3-cursor.1` |
 
-The table above is the current Cursor sync point. Open Pstack 1.4.2-cursor.1 imports this 0.15.3 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.4.3-cursor.1 imports this 0.15.5 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
@@ -20,6 +20,8 @@ The table above is the current Cursor sync point. Open Pstack 1.4.2-cursor.1 imp
 - Four `disable-model-invocation: true` lines from `73f8be4` are not applied to `how`, `why`, `unslop`, or `typescript-best-practices`. Poteto-mode invokes those skills by name, and the flag blocks that route on Claude Code.
 - The `70b2dc8` expected-runtime column in `children.tsv` and its elapsed-runtime stuck test are not applied. `AGENTS.md` forbids an implicit runtime timeout, so the port records each child's retained handle and treats only affirmative failure evidence as stuck.
 - The Claude manifest does not take the logo field from `efa2a53` because Claude Code has no schema for it. The shared asset is exposed through the Codex manifest instead.
+- The `12d587d` fallback that runs a rejected entry on its family's default, matched by `claude-`, `gpt-`, or `grok-` prefix, is not applied to `arena`, `architect`, `interrogate`, `how`, `why`, `reflect`, or `swarm`. `AGENTS.md` forbids a weaker-model fallback, and a provider-qualified entry such as `cursor:grok-4.7@xhigh` matches no prefix. An entry that cannot run stays a dropout under `provider-dispatch.md`.
+- The `12d587d` role lines `why investigators`, `why synthesizer`, `reflect tooling`, and `reflect judgment, divergent, synthesizer` are not applied. The port keeps its combined `why investigators, synthesizer` and `reflect tooling, judgment, divergent, synthesizer` lines, because every one of those roles stays on the parent for MCP access. The skills name the combined lines exactly, and setup drops only the retired `how critics` row.
 
 ## Check for changes
 

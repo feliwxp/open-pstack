@@ -31,7 +31,7 @@ Use the harness and tool surface running this skill: Claude Code or Codex. Envir
 
 Read the current parent-specific sheet when it exists. Before matrix validation, normalize only the rolling-alias predecessors that earlier pstack releases generated. A provider-qualified Claude model is migratable when its model component starts with `claude-fable-` or `claude-opus-` and the remaining revision contains only digits and hyphens. Replace that component in memory with `fable` or `opus`, preserving the provider, effort, role, and lane order. Record each original and normalized descriptor for the confirmation in step 7. This migration is valid loaded state and does not require a separate operator choice.
 
-Treat a `budget:` line, when present, as the current budget. It is the one non-role line and carries no effort of its own. Treat the normalized values as current role-to-family assignments. Overlay those rows on the complete first-run role map in step 7. Materialize any missing documented role row from that map on the next successful write. A duplicate or unknown role row is inconsistent state; report it and resolve it before probing. A bare host-native slug from an older sheet is also invalid because it does not say which provider owns it. A versioned Claude model outside the two migration families remains inconsistent state. If the sheet is missing, use the complete first-run role map and the model matrix's Default effort cells.
+Treat a `budget:` line, when present, as the current budget. It is the one non-role line and carries no effort of its own. Treat the normalized values as current role-to-family assignments. Overlay those rows on the complete first-run role map in step 7. Materialize any missing documented role row from that map on the next successful write. A row for a retired role is dropped, and step 7 lists each dropped row. `how critics` is the one retired role. A duplicate row, or any other role outside the first-run role map, is inconsistent state; report it and resolve it before probing. A bare host-native slug from an older sheet is also invalid because it does not say which provider owns it. A versioned Claude model outside the two migration families remains inconsistent state. If the sheet is missing, use the complete first-run role map and the model matrix's Default effort cells.
 
 ### 3. Parse per-family efforts
 
@@ -87,7 +87,7 @@ Rewrite every matrix-family descriptor to `provider:model@<requested effort for 
 
 ### 7. Confirm and commit
 
-Show any rolling-alias migrations as original and normalized descriptors. Then show the route table for this parent and every rendered role and descriptor. Ask for confirmation before writing.
+Show any rolling-alias migrations as original and normalized descriptors. List each retired row that step 2 dropped. Then show the route table for this parent and every rendered role and descriptor. Ask for confirmation before writing.
 
 Why and Reflect require the parent's live MCP surface. Keep their investigator, reviewer, and synthesizer roles on `inherit-parent` or `auto`; the bounded external runner deliberately omits ambient MCPs. `inherit-parent` and `auto` always validate, but say when they reduce a panel's provider diversity. For panel roles, one lane runs per entry. The list length is the fan-out count. `arena cross-judge pool` is a list from which Arena chooses a provider different from the parent and base candidate when possible. `swarm workers` is the default for every worker unless a race explicitly assigns another descriptor.
 

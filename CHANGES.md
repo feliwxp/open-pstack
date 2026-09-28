@@ -2,6 +2,22 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.4.3-cursor.1 syncs to Cursor pstack 0.15.5
+
+Open Pstack 1.4.3-cursor.1 tracks Cursor pstack 0.15.5 at `12d587dfb20741cafc376c42c696c5f6e2a64487`. It ports upstream `b0b9c7a` and `12d587d`.
+
+**Instruction cuts.** Upstream `b0b9c7a` removes 19 instructions that Opus 5.5 follows without the text. The port deletes the same text in interrogate's references, reflect's reviewer prompts, tdd, figure-it-out, four principle leaves, and the feature, bug-fix, and refactoring playbooks.
+
+**Exact role lines.** Each routed skill now names the sheet line it reads. `how` reads `how explorer` and `how explainer`. `why` reads `why investigators, synthesizer`. `reflect` reads `reflect tooling, judgment, divergent, synthesizer`. `arena`, `architect`, `interrogate`, and `swarm` read their panel or worker line. A missing sheet or line uses the skill default. Poteto-mode names the code, hardest-task, and prose lines. Upstream splits the Why and Reflect lines in two. The port keeps its combined lines because each of those roles stays on the parent for MCP access, so an installed sheet reads exactly as before.
+
+**No prefix fallback.** Upstream runs a rejected entry on its family default, matched by `claude-`, `gpt-`, or `grok-` prefix. The port does not apply that fallback. `AGENTS.md` forbids a weaker-model fallback, and no prefix matches a provider-qualified entry such as `cursor:grok-4.7@xhigh`. An entry that cannot run stays a dropout under provider dispatch.
+
+**Setup.** Setup drops a `how critics` row, the one retired role, and lists each dropped row before it writes. Any other unknown role is still inconsistent state.
+
+**Playbooks.** An Autopilot-full owner rebases its own branch inside its babysit and never force-pushes a shared branch. Autopilot owners babysit their own PRs. The show-me-your-work audit is append-only. A `start` row marks each run, and a wrong row is superseded, never edited. Multi-phase-plan and `check-plan` already read the configured `swarm workers` line, so upstream's lane-model change needs no port change.
+
+**Test.** `runner/model-matrix.test.ts` holds the owner's current sheet shape. It fails if a routed skill names a line that sheet lacks, if setup's role map drops or renames one of its lines, if any entry fails to resolve to a matrix family, or if any skill regains a prefix fallback.
+
 ## 1.4.2-cursor.1 syncs to Cursor pstack 0.15.3
 
 Open Pstack 1.4.2-cursor.1 tracks Cursor pstack 0.15.3 at `b42effe0aa50f59c693d7e2924714e015e00bf7c`. It ports upstream `f5bdd68`, `889ec4b`, `5bf2b15`, `70b2dc8`, and `b42effe`.
