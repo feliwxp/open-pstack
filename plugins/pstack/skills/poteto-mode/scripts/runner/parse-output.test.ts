@@ -197,14 +197,42 @@ describe("parseProviderOutput", () => {
       reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K Extra High", "high")
     ).toBe(false);
     expect(
-      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  Extra High", "xhigh")
-    ).toBe(false);
-    expect(
       reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 256K ExtraHigh", "xhigh")
     ).toBe(false);
     expect(
       reportedModelMatches("cursor", "grok-4.6", "Grok 4.7 256K Extra High", "xhigh")
     ).toBe(false);
+  });
+
+  it("verifies Cursor's Grok 4.7 listing names, which its stream also reports", () => {
+    // Lanes on 2026-09-30 and 2026-10-02 saw the stream report the listing form,
+    // with the 256K slot blank, for the same standard id.
+    for (const [effort, words] of [
+      ["low", "Low"],
+      ["medium", "Medium"],
+      ["high", "High"],
+      ["xhigh", "Extra High"],
+    ] as const) {
+      expect(
+        reportedModelMatches("cursor", "grok-4.7", `Grok 4.7  ${words}`, effort)
+      ).toBe(true);
+      expect(
+        reportedModelMatches("cursor", "grok-4.7-fast", `Grok 4.7  ${words} Fast​​`, effort)
+      ).toBe(true);
+    }
+    // Either form still names one speed tier, one effort, and one generation.
+    expect(
+      reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  Extra High Fast​​", "xhigh")
+    ).toBe(false);
+    expect(
+      reportedModelMatches("cursor", "grok-4.7-fast", "Grok 4.7  Extra High", "xhigh")
+    ).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  High", "xhigh")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7", "Grok 4.7  Extra High", "high")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.6", "Grok 4.7  Extra High", "xhigh")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7", "Grok 4.6 Extra High", "xhigh")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7", "Grok 4.7 128K Extra High", "xhigh")).toBe(false);
+    expect(reportedModelMatches("cursor", "grok-4.7", "Grok 4.7", "xhigh")).toBe(false);
   });
 
   it("selects the requested Claude model when usage includes a side model", () => {

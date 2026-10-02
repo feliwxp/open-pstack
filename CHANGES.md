@@ -2,6 +2,10 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.4.4-cursor.1 verifies both Grok 4.7 display names
+
+Cursor's stream reports a Grok 4.7 run under either of two names: `Grok 4.7 256K Extra High`, seen on 2026-09-23, or the `cursor-agent models` listing form `Grok 4.7  Extra High`, seen by lanes from 2026-09-30 and again live on 2026-10-02. The runner registered only the first, so a run reported under the listing form ended `malformed-output` and its seat dropped. Each Grok 4.7 row in `cursor-models.ts` now registers both names, and verification accepts either after the same normalization. Equality on every word still separates efforts, generations, and the Fast tier. This is a runner fix only. The Cursor sync point stays at 0.15.5.
+
 ## 1.4.3-cursor.1 syncs to Cursor pstack 0.15.5
 
 Open Pstack 1.4.3-cursor.1 tracks Cursor pstack 0.15.5 at `12d587dfb20741cafc376c42c696c5f6e2a64487`. It ports upstream `b0b9c7a` and `12d587d`.
