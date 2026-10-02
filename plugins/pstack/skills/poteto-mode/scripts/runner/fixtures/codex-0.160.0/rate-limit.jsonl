@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0fdcf-0000-7000-8000-000000000002"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 429 Too Many Requests: Rate limit reached, url: https://api.openai.com/v1/responses, request id: req_00000000000000000000000000000002)"}
+{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests, request id: req_00000000000000000000000000000002"}}
