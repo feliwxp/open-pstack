@@ -618,6 +618,28 @@ describe("runLane", () => {
     expect(receipt(fast.receiptPath).argv).toContain("grok-4.7-xhigh-fast");
   });
 
+  it("verifies a Grok 4.7 lane whose stream reports the listing name", async () => {
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.7  Extra High";
+    const listed = { ...options("cursor", "cursor-4.7-listed"), model: "grok-4.7" };
+    expect((await runLane(listed)).exitCode).toBe(0);
+    expect(receipt(listed.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.7  Extra High",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.7  Extra High Fast​​";
+    const fastServed = { ...options("cursor", "cursor-4.7-fast-served"), model: "grok-4.7" };
+    expect((await runLane(fastServed)).exitCode).toBe(65);
+    expect(existsSync(fastServed.outputPath)).toBe(false);
+    expect(receipt(fastServed.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      modelVerified: false,
+      error: { message: "requested model grok-4.7 was not reported by cursor" },
+    });
+  });
+
   it("refuses a Cursor lane served the other speed tier's display name", async () => {
     process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High Fast";
     const mismatched = options("cursor", "cursor-mismatched");
