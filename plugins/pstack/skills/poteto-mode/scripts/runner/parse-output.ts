@@ -175,6 +175,26 @@ function parseCursor(stdout: string): ParsedOutput {
   };
 }
 
+export function codexFailureMessage(stdout: string): string | null {
+  let turnFailure: string | null = null;
+  let errorMessage: string | null = null;
+  for (const line of stdout.split("\n")) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const event = object(raw);
+    if (event?.type === "turn.failed") {
+      turnFailure = nullableString(object(event.error)?.message);
+    } else if (event?.type === "error") {
+      errorMessage = nullableString(event.message);
+    }
+  }
+  return turnFailure ?? errorMessage;
+}
+
 function parseCodex(stdout: string): ParsedOutput {
   let text: string | null = null;
   let usage: NormalizedUsage | null = null;

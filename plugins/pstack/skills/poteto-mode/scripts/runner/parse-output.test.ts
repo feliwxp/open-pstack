@@ -1,5 +1,68 @@
 import { describe, expect, it } from "bun:test";
-import { parseProviderOutput, reportedModelMatches } from "./parse-output.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  codexFailureMessage,
+  parseProviderOutput,
+  reportedModelMatches,
+} from "./parse-output.ts";
+
+describe("codexFailureMessage", () => {
+  for (const [name, message] of [
+    ["signed-out", "401 Unauthorized"],
+    ["usage-limit", "You’ve hit your usage limit"],
+    ["rate-limit", "429 Too Many Requests"],
+    ["unknown-model", "The 'gpt-6.1-sol-nope' model is not supported"],
+    ["unsupported-effort", "Unsupported value: 'max' is not supported"],
+    ["network-wait", "Reconnecting... waiting for network"],
+  ] as const) {
+    it(`reads the terminal failure message from the ${name} fixture`, () => {
+      const stdout = readFileSync(
+        join(import.meta.dir, "fixtures/codex-0.160.0", `${name}.jsonl`),
+        "utf8"
+      );
+      const terminal = JSON.parse(stdout.trim().split("\n").at(-1)!);
+      const expected = terminal.type === "turn.failed"
+        ? terminal.error.message
+        : terminal.message;
+      expect(codexFailureMessage(stdout)).toBe(expected);
+      expect(codexFailureMessage(stdout)).toContain(message);
+    });
+  }
+
+  it("prefers the last turn.failed message over errors and agent text", () => {
+    const stdout = [
+      { type: "turn.failed", error: { message: "first failed turn" } },
+      { type: "error", message: "earlier top-level error" },
+      { type: "item.completed", item: { type: "agent_message", text: "authentication" } },
+      { type: "turn.failed", error: { message: "last failed turn" } },
+      { type: "error", message: "later top-level error" },
+    ].map((event) => JSON.stringify(event)).join("\n");
+    expect(codexFailureMessage(stdout)).toBe("last failed turn");
+  });
+
+  it("falls back to the last top-level error while skipping non-JSON lines", () => {
+    const stdout = [
+      "not JSON",
+      JSON.stringify({ type: "error", message: "first error" }),
+      "{broken JSON}",
+      "null",
+      JSON.stringify({ type: "error", message: "last error" }),
+      JSON.stringify({ type: "item.completed", item: { type: "error", message: "item error" } }),
+      "more non-JSON output",
+    ].join("\n");
+    expect(codexFailureMessage(stdout)).toBe("last error");
+  });
+
+  it("returns null when no top-level failure message exists", () => {
+    const stdout = [
+      "not JSON", "", "null", "[]", "{}",
+      JSON.stringify({ type: "item.completed", item: { type: "error", message: "item error" } }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+    expect(codexFailureMessage(stdout)).toBeNull();
+  });
+});
 
 describe("parseProviderOutput", () => {
   it("extracts Claude text, model, usage, cost, and session", () => {

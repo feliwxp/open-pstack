@@ -2,6 +2,14 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.4.5-cursor.1 adds GPT-6.1 Sol and names every lane dropout
+
+**Sol 6.1 family.** The model matrix gains an on-request `sol-6.1` row: `codex:gpt-6.1-sol@<effort>`, default `max`, selectable `low` through `max`. Codex CLI 0.160.0 lists `gpt-6.1-sol` in `codex debug models`, and a ChatGPT login runs it with `--model gpt-6.1-sol` and `model_reasoning_effort`. Codex also offers `ultra`, which adds automatic task delegation, so it stays outside the effort universe. Setup probes the row only when a sheet or the operator names it. The upstream defaults and the default panel do not change.
+
+**Named dropouts.** The runner had no status for an exhausted account, a rate limit, or a lost network, so those lanes ended `child-failed` or never ended. Three receipt statuses join the existing ones: `usage-limited` (exit 69), `rate-limited` (exit 75), and `unavailable-network` (exit 68). `provider-dispatch.md` lists every status with its exit code and cause, and a session reports a dropout by that name. A failed Codex lane is classified from the message of its `turn.failed` event, so text the model wrote earlier in the stream cannot decide the status. The patterns come from Codex CLI 0.160.0 fixtures under `runner/fixtures/codex-0.160.0/`. Four were captured live: signed out, unknown model, unsupported effort, and refused connection. The usage-limit and rate-limit fixtures are built from the 0.160.0 binary's own strings, because neither can be triggered without spending quota.
+
+**Network wait.** Codex 0.160.0 never exits when it loses the network. After its retries it emits `Reconnecting... waiting for network` and waits indefinitely. When that event arrives before Codex has emitted any non-error item, the runner stops the child and writes `unavailable-network`. A wait after the model has produced output is left to Codex, which resumes when the network returns. No timer is involved.
+
 ## 1.4.4-cursor.1 verifies both Grok 4.7 display names
 
 Cursor's stream reports a Grok 4.7 run under either of two names: `Grok 4.7 256K Extra High`, seen on 2026-09-23, or the `cursor-agent models` listing form `Grok 4.7  Extra High`, seen by lanes from 2026-09-30 and again live on 2026-10-02. The runner registered only the first, so a run reported under the listing form ended `malformed-output` and its seat dropped. Each Grok 4.7 row in `cursor-models.ts` now registers both names, and verification accepts either after the same normalization. Equality on every word still separates efforts, generations, and the Fast tier. This is a runner fix only. The Cursor sync point stays at 0.15.5.

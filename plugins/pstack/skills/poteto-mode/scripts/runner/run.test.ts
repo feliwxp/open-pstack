@@ -21,7 +21,7 @@ let bin = "";
 let previousPath: string | undefined;
 
 const fake = `#!/usr/bin/env bun
-import { appendFileSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const name = process.argv[1].split("/").at(-1);
 const isPreflight =
@@ -115,6 +115,40 @@ if (process.env.FAKE_INVALID_MODEL === "1") {
   console.error("The requested model is not supported with this account.");
   process.exit(1);
 }
+if (process.env.FAKE_FAILURE_TEXT) {
+  console.error(process.env.FAKE_FAILURE_TEXT);
+  process.exit(1);
+}
+if (name === "codex" && process.env.FAKE_CODEX_FIXTURE) {
+  const fixturePath = process.env.FAKE_CODEX_FIXTURE;
+  const fixture = readFileSync(fixturePath, "utf8");
+  const waitsForever = fixturePath.endsWith("/network-wait.jsonl");
+  if (waitsForever) {
+    process.on("SIGTERM", () => {
+      if (process.env.FAKE_TERMINATED_PATH) {
+        writeFileSync(process.env.FAKE_TERMINATED_PATH, "SIGTERM");
+      }
+      process.exit(1);
+    });
+  }
+  console.error("Codex fixture stderr");
+  if (process.env.FAKE_CODEX_CHUNKED === "1") {
+    for (let offset = 0; offset < fixture.length; offset += 17) {
+      process.stdout.write(fixture.slice(offset, offset + 17));
+      await Bun.sleep(1);
+    }
+  } else {
+    process.stdout.write(fixture);
+  }
+  if (waitsForever) {
+    const waitingLine = fixture.trim().split("\\n").at(-1);
+    while (true) {
+      await Bun.sleep(50);
+      process.stdout.write(waitingLine + "\\n");
+    }
+  }
+  process.exit(Number(process.env.FAKE_CODEX_FIXTURE_EXIT_CODE ?? 1));
+}
 if (stage === "model" && process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS) {
   const seconds = Number(process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS) / 1000;
   const descendant = Bun.spawn(["/bin/sh", "-c", "sleep " + seconds], {
@@ -193,6 +227,21 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
 function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
 }
+
+function codexFixture(name: string): string {
+  return join(import.meta.dir, "fixtures/codex-0.160.0", `${name}.jsonl`);
+}
+
+function codexScenario(events: readonly unknown[]): void {
+  const path = join(scratch, "codex-scenario.jsonl");
+  writeFileSync(path, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+  process.env.FAKE_CODEX_FIXTURE = path;
+}
+
+const CODEX_NETWORK_WAIT = {
+  type: "error",
+  message: "Reconnecting... waiting for network (Connection failed: error sending request)",
+} as const;
 
 function runnerArgs(input: RunnerOptions): string[] {
   const args = [
@@ -281,6 +330,10 @@ beforeEach(() => {
   delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
   delete process.env.FAKE_DESCENDANT_PID_PATH;
   delete process.env.FAKE_SELF_SIGNAL;
+  delete process.env.FAKE_CODEX_FIXTURE;
+  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
+  delete process.env.FAKE_CODEX_CHUNKED;
+  delete process.env.FAKE_FAILURE_TEXT;
 });
 
 afterEach(() => {
@@ -309,6 +362,10 @@ afterEach(() => {
   delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
   delete process.env.FAKE_DESCENDANT_PID_PATH;
   delete process.env.FAKE_SELF_SIGNAL;
+  delete process.env.FAKE_CODEX_FIXTURE;
+  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
+  delete process.env.FAKE_CODEX_CHUNKED;
+  delete process.env.FAKE_FAILURE_TEXT;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -346,6 +403,174 @@ describe("runLane", () => {
       modelVerified: false,
       modelEvidence: "pinned-argv",
     });
+  });
+
+  for (const [name, status, exitCode] of [
+    ["signed-out", "unauthenticated", 77],
+    ["usage-limit", "usage-limited", 69],
+    ["rate-limit", "rate-limited", 75],
+    ["unknown-model", "unavailable-model", 69],
+    ["unsupported-effort", "unavailable-model", 69],
+  ] as const) {
+    it(`classifies the Codex ${name} fixture as ${status}`, async () => {
+      process.env.FAKE_CODEX_FIXTURE = codexFixture(name);
+      const input = options("codex");
+      const result = await runLane(input);
+      expect(result.exitCode).toBe(exitCode);
+      expect(existsSync(input.outputPath)).toBe(false);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status,
+        exitCode: 1,
+        signal: null,
+        preflight: { status: "passed" },
+        error: {
+          evidence: `Codex fixture stderr\n\n${readFileSync(codexFixture(name), "utf8").trim()}`,
+        },
+      });
+    });
+  }
+
+  for (const chunked of [false, true]) {
+    it(`stops Codex network-wait before progress without a timeout${chunked ? " across split stdout lines" : ""}`, async () => {
+      process.env.FAKE_CODEX_FIXTURE = codexFixture("network-wait");
+      if (chunked) process.env.FAKE_CODEX_CHUNKED = "1";
+      const started = join(scratch, "network-child.pid");
+      const terminated = join(scratch, "network-child.terminated");
+      process.env.FAKE_MODEL_STARTED_PATH = started;
+      process.env.FAKE_TERMINATED_PATH = terminated;
+      const input = options("codex");
+      expect(input.timeoutMs).toBeNull();
+      expect(runnerArgs(input)).not.toContain("--timeout");
+      const lane = runLane(input);
+      const result = await Promise.race([lane, Bun.sleep(3_000).then(() => null)]);
+      if (result === null) {
+        // Bound only the test, and reap the fake so a red run cannot leak it.
+        process.kill(Number(readFileSync(started, "utf8")), "SIGKILL");
+        await lane;
+        throw new Error("Codex network-wait lane did not finish within 3000ms");
+      }
+      expect(result.exitCode).toBe(68);
+      expect(existsSync(input.outputPath)).toBe(false);
+      expect(readFileSync(terminated, "utf8")).toBe("SIGTERM");
+      expect(processIsAlive(Number(readFileSync(started, "utf8")))).toBe(false);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "unavailable-network",
+        signal: "SIGTERM",
+        preflight: { status: "passed" },
+        error: {
+          message: "Codex was waiting for the network before the model produced output",
+        },
+      });
+      expect(result.receipt.error?.evidence).toContain("Codex fixture stderr");
+      expect(result.receipt.error?.evidence).toContain(
+        readFileSync(codexFixture("network-wait"), "utf8").trim()
+      );
+      expect(result.receipt.elapsedMs).toBeLessThan(3_000);
+    }, 6_000);
+  }
+
+  it("allows Codex to complete after an agent message and a later network wait", async () => {
+    codexScenario([
+      { type: "item.completed", item: { type: "agent_message", text: "CODEX_OK" } },
+      CODEX_NETWORK_WAIT,
+      { type: "turn.completed", usage: { input_tokens: 20, output_tokens: 3 } },
+    ]);
+    process.env.FAKE_CODEX_FIXTURE_EXIT_CODE = "0";
+    const input = options("codex");
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "complete",
+      signal: null,
+      usage: { inputTokens: 20, outputTokens: 3 },
+    });
+    expect(readFileSync(input.outputPath, "utf8")).toBe("CODEX_OK");
+  });
+
+  it("lets Codex own network waits after item.started or turn.completed progress", async () => {
+    process.env.FAKE_CODEX_FIXTURE_EXIT_CODE = "0";
+    const results = [];
+    for (const progress of [
+      { type: "item.started", item: { type: "command_execution", command: "pwd" } },
+      { type: "turn.completed" },
+    ]) {
+      codexScenario([
+        progress,
+        CODEX_NETWORK_WAIT,
+        { type: "item.completed", item: { type: "agent_message", text: "CODEX_OK" } },
+        { type: "turn.completed" },
+      ]);
+      const result = await runLane(options("codex", progress.type));
+      results.push([result.receipt.status, result.exitCode, result.receipt.signal]);
+    }
+    expect(results).toEqual([["complete", 0, null], ["complete", 0, null]]);
+  });
+
+  it("classifies Codex turn.failed instead of earlier rate limit and authentication text", async () => {
+    const path = join(scratch, "codex-agent-text.jsonl");
+    writeFileSync(path, `${JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "Earlier rate limit and authentication discussion" },
+    })}\n${readFileSync(codexFixture("unknown-model"), "utf8")}`);
+    process.env.FAKE_CODEX_FIXTURE = path;
+    const input = options("codex");
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(69);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "unavailable-model" });
+    expect(result.receipt.error?.evidence).toContain("Earlier rate limit and authentication discussion");
+    expect(result.receipt.error?.evidence).toContain("gpt-6.1-sol-nope");
+  });
+
+  it("classifies ordered failure patterns without hex-id or content-filter false positives", async () => {
+    const cases = [
+      ["401 Unauthorized; quota exceeded", "unauthenticated", 77],
+      ["hit your usage limit", "usage-limited", 69],
+      ["Usage limit reached", "usage-limited", 69],
+      ["usage_limit_reached; 429 Too Many Requests", "usage-limited", 69],
+      ["out of credits", "usage-limited", 69],
+      ["quota exceeded", "usage-limited", 69],
+      ["insufficient_quota", "usage-limited", 69],
+      ["spend cap", "usage-limited", 69],
+      ["Upgrade to Plus", "usage-limited", 69],
+      ["unexpected status 429", "rate-limited", 75],
+      ["Too many requests", "rate-limited", 75],
+      ["rate limit; model not supported", "rate-limited", 75],
+      ["RATE_LIMIT", "rate-limited", 75],
+      ["The 'gpt-6.1-sol-nope' model is not supported; connection reset", "unavailable-model", 69],
+      ["Unsupported value: 'max' is not supported with the 'gpt-5.5' model.", "unavailable-model", 69],
+      ["waiting for network", "unavailable-network", 68],
+      ["error sending request", "unavailable-network", 68],
+      ["Connection refused", "unavailable-network", 68],
+      ["connection reset", "unavailable-network", 68],
+      ["DNS error", "unavailable-network", 68],
+      ["failed to lookup address", "unavailable-network", 68],
+      ["network is unreachable", "unavailable-network", 68],
+      ["cf-ray: a429bee-SIN, request id: req_abc429def", "child-failed", 70],
+      ["stream disconnected before completion: content filter stop", "child-failed", 70],
+    ] as const;
+    const results = [];
+    for (const [index, [message]] of cases.entries()) {
+      codexScenario([{ type: "turn.failed", error: { message } }]);
+      const result = await runLane(options("codex", `pattern-${index}`));
+      results.push([message, result.receipt.status, result.exitCode]);
+    }
+    expect(results).toEqual(cases.map((entry) => [...entry]));
+  }, 10_000);
+
+  it("classifies combined failure output for other providers and Codex without JSON events", async () => {
+    process.env.FAKE_FAILURE_TEXT = "401 Unauthorized";
+    const results = [];
+    for (const provider of ["claude", "codex", "grok", "cursor"] as const) {
+      const result = await runLane(options(provider));
+      results.push([provider, result.receipt.status, result.exitCode]);
+      expect(result.receipt.error?.evidence).toBe("401 Unauthorized");
+    }
+    expect(results).toEqual([
+      ["claude", "unauthenticated", 77],
+      ["codex", "unauthenticated", 77],
+      ["grok", "unauthenticated", 77],
+      ["cursor", "unauthenticated", 77],
+    ]);
   });
 
   it("classifies an unavailable model without falling back", async () => {

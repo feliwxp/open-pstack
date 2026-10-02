@@ -15,10 +15,13 @@ pstack model choices are provider-qualified descriptors:
 | grok | grok-4.7-xhigh-fast | grok | grok-4.7 | xhigh | low medium high xhigh max | - | required |
 | fable | - | claude | fable | max | low medium high xhigh max | fable | on request |
 | cursor | grok-4.7-xhigh-fast | cursor | grok-4.7 | xhigh | low medium high xhigh | - | on request |
+| sol-6.1 | - | codex | gpt-6.1-sol | max | low medium high xhigh max | - | on request |
 
 The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`. First-run requested efforts are the Default effort cell of each row. A Claude-native agent stem of `-` means the family has no Claude-native agent. Otherwise the shipped agent name is `pstack-<stem>-<effort>`.
 
 A Setup probe cell of `required` means setup always asks for that family's effort and probes it. The three required families make up the default panel, in matrix order: Opus, Sol, Grok. `on request` marks an optional family: setup touches it only when the loaded or requested sheet names it, and no sheet has to carry a role for it. Upstream pstack 0.15.3 has no Fable seat, so its Upstream pstack choice cell is `-`; a sheet that names `claude:fable@<effort>` keeps its native Fable lane.
+
+The `sol-6.1` family runs GPT-6.1 Sol through the same Codex route as `sol`. Codex CLI 0.160.0 lists `gpt-6.1-sol` in `codex debug models` with the efforts `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, and a ChatGPT login runs it with `--model gpt-6.1-sol` and `model_reasoning_effort` set to the requested effort. `ultra` adds automatic task delegation, which a lane must not do, so it stays outside the effort universe. Upstream pstack 0.15.5 has no GPT-6.1 Sol seat, so its Upstream pstack choice cell is `-`.
 
 `fable` and `opus` are Claude Code's rolling aliases. Claude resolves each alias to the latest available family revision. A runner receipt keeps the requested alias in `model` and the concrete provider-reported revision in `reportedModel`; verification accepts only a numeric `claude-fable-*` or `claude-opus-*` revision from the matching family.
 
@@ -102,6 +105,23 @@ Success requires all of these:
 
 The receipt also carries elapsed time, token usage when the CLI exposes it, and cost when available. Keep it with the arena or review artifacts so parent-harness comparisons are evidence-based.
 
-Any missing CLI, failed login, unavailable model, explicit timeout, cancellation, catchable post-reservation launcher failure, non-zero child exit, malformed result, or model mismatch is a receipt-bearing dropout. Record it and apply the calling skill's existing dropout policy. A `cancelled` receipt proves that the runner received the signal; its `signal` field is non-null only when the runner sent that signal to a still-active direct CLI child, and remains null when cancellation only stopped a post-exit pipe drain. The provider CLI owns any processes it starts beneath that direct child; the receipt does not claim a process-tree kill. Do not delete or overwrite the receipt. Never substitute the parent model, retry another provider, or reinterpret an external descriptor as a native model slug.
+Any missing CLI, failed login, exhausted usage, rate limit, unavailable model, unreachable network, explicit timeout, cancellation, catchable post-reservation launcher failure, non-zero child exit, malformed result, or model mismatch is a receipt-bearing dropout. Record it, report the lane by its receipt status name, and apply the calling skill's existing dropout policy.
+
+| Receipt status | Exit | Cause |
+|---|---|---|
+| `unavailable-cli` | 69 | The provider CLI is not on `PATH`. |
+| `unauthenticated` | 77 | The CLI is signed out, its preflight failed, or the provider answered 401. |
+| `usage-limited` | 69 | The account hit its usage limit or spend cap, ran out of credits or quota, or its plan does not include the CLI. |
+| `rate-limited` | 75 | The provider still answered 429 after the CLI's own retries. |
+| `unavailable-model` | 69 | The provider refused the model, or the model at the requested effort. |
+| `unavailable-network` | 68 | The CLI could not reach the provider. |
+| `timed-out` | 124 | The explicit `--timeout` deadline elapsed. |
+| `cancelled` | 130 | The runner received SIGINT or SIGTERM. |
+| `child-failed` | 70 | The child exited non-zero for any other reason. |
+| `malformed-output` | 65 | The child exited zero without a verifiable result. |
+
+The runner classifies a failed Codex lane from the message of Codex's `turn.failed` event, or its last `error` event, rather than from the whole stream, so text the model wrote earlier cannot decide the status. Other providers are classified from their combined output. The patterns come from Codex CLI 0.160.0. Signed out, an unknown model, an unsupported effort, and a refused connection were run live. The usage-limit and rate-limit messages come from the strings in the 0.160.0 binary, because neither can be triggered without spending the account's quota.
+
+Codex never exits when it loses the network: after its retries it emits `Reconnecting... waiting for network` and waits. When that event arrives before Codex has emitted any item other than an `error` item, the model never started, so the runner stops the child with SIGTERM and writes `unavailable-network`. Once the model has produced an item, a later network wait belongs to Codex, which resumes when the network returns. This is Codex's own failure report, not an elapsed-time rule. A `cancelled` receipt proves that the runner received the signal; its `signal` field is non-null only when the runner sent that signal to a still-active direct CLI child, and remains null when cancellation only stopped a post-exit pipe drain. The provider CLI owns any processes it starts beneath that direct child; the receipt does not claim a process-tree kill. Do not delete or overwrite the receipt. Never substitute the parent model, retry another provider, or reinterpret an external descriptor as a native model slug.
 
 Start native and external lanes in the same fan-out phase, then wait for all of them before judging. A judge must not read candidate paths while their owners are still writing.

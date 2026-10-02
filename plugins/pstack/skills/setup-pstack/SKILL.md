@@ -54,7 +54,7 @@ One distinct effort per family is the current value. A family with no non-alias 
 
 **(c) Confirm each family.** Ask exactly three effort questions, one each for Opus, Sol, and Grok. Name each model, the budget's proposal, its current value on a rerun, and the Selectable efforts from its matrix row. Empty input accepts the budget's proposal. Do not offer to reset customized role lanes.
 
-A matrix row whose Setup probe cell reads `on request` is optional. Ask its effort question only when the loaded sheet or the operator's request names that family. Cursor is one such family: an operator who pays for Cursor rather than SuperGrok reaches the same Grok weights through `cursor:grok-4.7@<effort>`, or through `cursor:grok-4.7-fast@<effort>` for Cursor's higher-priced Fast tier. Both model names belong to the Cursor row, and the row's Model cell names the default. Fable is the other: upstream pstack 0.15.3 has no Fable seat, and a sheet that names `claude:fable@<effort>` keeps it. Never offer an optional family to an operator who did not name it.
+A matrix row whose Setup probe cell reads `on request` is optional. Ask its effort question only when the loaded sheet or the operator's request names that family. Cursor is one such family: an operator who pays for Cursor rather than SuperGrok reaches the same Grok weights through `cursor:grok-4.7@<effort>`, or through `cursor:grok-4.7-fast@<effort>` for Cursor's higher-priced Fast tier. Both model names belong to the Cursor row, and the row's Model cell names the default. Fable is another: upstream pstack 0.15.3 has no Fable seat, and a sheet that names `claude:fable@<effort>` keeps it. Sol 6.1 is the third: a sheet that names `codex:gpt-6.1-sol@<effort>` runs GPT-6.1 Sol through the same Codex route as the Sol row. Never offer an optional family to an operator who did not name it.
 
 ### 5. Probe the three requested pairs
 
@@ -67,6 +67,7 @@ Probe the three selected `provider:model@effort` pairs, plus one pair for each o
 | Grok | Grok matrix row + selected effort | Grok CLI | Grok CLI | `grok models` must list the requested model; one-turn probe |
 | Fable, on request | Fable matrix row + selected effort | native Agent `pstack-fable-<effort>` | Claude CLI | native one-turn probe or `claude auth status --json` plus one-turn probe |
 | Cursor, on request | Cursor matrix row + selected effort | Cursor CLI | Cursor CLI | `cursor-agent models` must list the requested Cursor model id; one-turn probe |
+| Sol 6.1, on request | Sol 6.1 matrix row + selected effort | `codex exec` | native `spawn_agent` | `codex login status` plus one-turn probe or native one-turn probe |
 
 Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model and effort flags run. Record native and external results separately. Never call the external launcher for the parent's own provider. On a Claude parent, the Opus and Fable probes are one-turn runs of the mapped `pstack-<stem>-<effort>` agent. On a Codex parent, the Sol probe is native `spawn_agent` with the selected `reasoning_effort`. Every other pair uses the external runner with the selected effort flag.
 

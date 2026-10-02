@@ -23,7 +23,7 @@ const MATRIX_HEADER = [
   "Setup probe",
 ] as const;
 
-const FAMILY_ORDER = ["opus", "sol", "grok", "fable", "cursor"] as const;
+const FAMILY_ORDER = ["opus", "sol", "grok", "fable", "cursor", "sol-6.1"] as const;
 const PROVIDERS = ["claude", "codex", "grok", "cursor"] as const;
 const SETUP_PROBES = ["required", "on request"] as const;
 const DESCRIPTOR_RE =
@@ -230,11 +230,13 @@ describe("model matrix", () => {
       ["grok", "xhigh"],
       ["fable", "max"],
       ["cursor", "xhigh"],
+      ["sol-6.1", "max"],
     ]);
     expect(rows.map((row) => row.setupProbe)).toEqual([
       "required",
       "required",
       "required",
+      "on request",
       "on request",
       "on request",
     ]);
@@ -251,6 +253,21 @@ describe("model matrix", () => {
       ["opus", "opus"],
       ["fable", "fable"],
     ]);
+    expect(rows.find((row) => row.family === "sol-6.1")).toEqual({
+      family: "sol-6.1",
+      upstreamChoice: "-",
+      provider: "codex",
+      model: "gpt-6.1-sol",
+      defaultEffort: "max",
+      selectableEfforts: [...EFFORTS],
+      claudeNativeAgentStem: null,
+      setupProbe: "on request",
+    });
+    expect(resolveEntry("codex:gpt-6.1-sol@max", rows)).toBe("sol-6.1");
+    expect(() => resolveEntry("codex:gpt-6.1-sol@ultra", rows)).toThrow(
+      "not an effort: ultra"
+    );
+    expect("codex:gpt-6.1-sol@ultra".match(DESCRIPTOR_RE)).toBeNull();
   });
 
   it("ships exactly the declared Claude-native frontier agents", () => {

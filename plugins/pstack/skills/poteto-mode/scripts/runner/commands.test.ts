@@ -49,6 +49,35 @@ describe("invocationCommand", () => {
     expect(spec.args).not.toContain("danger-full-access");
   });
 
+  it("pins GPT-6.1 Sol and max effort in the exact Codex argv", () => {
+    const spec = invocationCommand(options({ model: "gpt-6.1-sol", effort: "max" }));
+    expect(spec.command).toBe("codex");
+    expect(spec.stdin).toBe("prompt");
+    expect(spec.args).toEqual([
+      "exec",
+      "--model",
+      "gpt-6.1-sol",
+      "--config",
+      'model_reasoning_effort="max"',
+      "--sandbox",
+      "read-only",
+      "--cd",
+      "/tmp/worktree",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--disable",
+      "plugins",
+      "--disable",
+      "multi_agent",
+      "--disable",
+      "hooks",
+      "--disable",
+      "memories",
+      "--json",
+      "-",
+    ]);
+  });
+
   it("passes Claude model, effort, permissions, and no-recursion controls", () => {
     const spec = invocationCommand(
       options({
