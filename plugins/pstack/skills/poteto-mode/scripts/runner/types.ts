@@ -26,7 +26,10 @@ export type ReceiptStatus =
   | "cancelled"
   | "unavailable-cli"
   | "unauthenticated"
+  | "usage-limited"
+  | "rate-limited"
   | "unavailable-model"
+  | "unavailable-network"
   | "timed-out"
   | "child-failed"
   | "malformed-output";

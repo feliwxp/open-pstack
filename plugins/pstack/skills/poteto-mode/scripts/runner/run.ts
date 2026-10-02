@@ -12,7 +12,11 @@ import { dirname, resolve } from "node:path";
 import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
 import { cursorModel } from "./cursor-models.ts";
 import { versionedClaudeAlias } from "./model-aliases.ts";
-import { parseProviderOutput, reportedModelMatches } from "./parse-output.ts";
+import {
+  codexFailureMessage,
+  parseProviderOutput,
+  reportedModelMatches,
+} from "./parse-output.ts";
 import type {
   Provider,
   ReceiptStatus,
@@ -32,6 +36,7 @@ interface ProcessResult {
   readonly stderr: string;
   readonly timedOut: boolean;
   readonly cancelledBy: CancellationSignal | null;
+  readonly watcherStopped: boolean;
 }
 
 type CancellationSignal = "SIGINT" | "SIGTERM";
@@ -174,23 +179,48 @@ interface StreamCapture {
   cancel(): Promise<void>;
 }
 
-function captureStream(stream: ReadableStream<Uint8Array>): StreamCapture {
+type StdoutLineWatcher = (line: string) => boolean;
+
+function captureStream(
+  stream: ReadableStream<Uint8Array>,
+  onLine?: (line: string) => void
+): StreamCapture {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let text = "";
+  let partialLine = "";
   let cancellationRequested = false;
+
+  const append = (chunk: string): void => {
+    text += chunk;
+    if (onLine === undefined) return;
+    partialLine += chunk;
+    let newline: number;
+    while ((newline = partialLine.indexOf("\n")) >= 0) {
+      const line = partialLine.slice(0, newline);
+      partialLine = partialLine.slice(newline + 1);
+      onLine(line);
+    }
+  };
+  const flush = (): void => {
+    append(decoder.decode());
+    if (partialLine.length > 0) {
+      onLine?.(partialLine);
+      partialLine = "";
+    }
+  };
 
   const result = (async (): Promise<string> => {
     try {
       while (true) {
         const next = await reader.read();
         if (next.done) break;
-        text += decoder.decode(next.value, { stream: true });
+        append(decoder.decode(next.value, { stream: true }));
       }
-      text += decoder.decode();
+      flush();
       return text;
     } catch (error) {
-      text += decoder.decode();
+      flush();
       if (!cancellationRequested) throw error;
       return text;
     } finally {
@@ -214,7 +244,8 @@ function captureStream(stream: ReadableStream<Uint8Array>): StreamCapture {
 type ProcessEvent =
   | { readonly kind: "exited"; readonly exitCode: number }
   | { readonly kind: "cancelled"; readonly signal: CancellationSignal }
-  | { readonly kind: "timed-out" };
+  | { readonly kind: "timed-out" }
+  | { readonly kind: "watcher-stopped" };
 
 async function runProcess(
   executable: string,
@@ -223,7 +254,8 @@ async function runProcess(
   env: NodeJS.ProcessEnv,
   prompt: string,
   deadlineAt: number | null,
-  cancellation: RunCancellation
+  cancellation: RunCancellation,
+  stdoutLineWatcher?: StdoutLineWatcher
 ): Promise<ProcessResult> {
   const child = Bun.spawn([executable, ...spec.args], {
     cwd,
@@ -233,7 +265,19 @@ async function runProcess(
     stderr: "pipe",
   });
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
-  const stdoutCapture = captureStream(child.stdout);
+  let onStdoutLine: ((line: string) => void) | undefined;
+  const watched: Promise<ProcessEvent> | null = stdoutLineWatcher === undefined
+    ? null
+    : new Promise((resolve) => {
+      let stopped = false;
+      onStdoutLine = (line) => {
+        if (!stopped && stdoutLineWatcher(line)) {
+          stopped = true;
+          resolve({ kind: "watcher-stopped" });
+        }
+      };
+    });
+  const stdoutCapture = captureStream(child.stdout, onStdoutLine);
   const stderrCapture = captureStream(child.stderr);
   const streams = Promise.all([stdoutCapture.result, stderrCapture.result]);
   const exited = child.exited.then((exitCode): ProcessEvent => ({
@@ -267,6 +311,7 @@ async function runProcess(
 
     const completions = [exited, cancelled];
     if (deadline !== null) completions.push(deadline);
+    if (watched !== null) completions.push(watched);
     const first = await Promise.race(completions);
 
     let outcome = first;
@@ -282,6 +327,7 @@ async function runProcess(
         cancelled,
       ];
       if (deadline !== null) drains.push(deadline);
+      if (watched !== null) drains.push(watched);
       const drain = await Promise.race(drains);
       if (drain.kind === "drained") {
         captured = drain.captured;
@@ -295,9 +341,10 @@ async function runProcess(
 
     const cancelledBy = cancellation.signal;
     const timedOut = cancelledBy === null && outcome.kind === "timed-out";
+    const watcherStopped = cancelledBy === null && outcome.kind === "watcher-stopped";
     if (cancelledBy !== null) {
       if (await terminate(child, cancelledBy)) signalSent = cancelledBy;
-    } else if (timedOut) {
+    } else if (timedOut || watcherStopped) {
       if (await terminate(child)) signalSent = "SIGTERM";
     }
     if (captured === null) {
@@ -312,6 +359,7 @@ async function runProcess(
       stderr: captured[1],
       timedOut,
       cancelledBy,
+      watcherStopped,
     };
   } catch (error) {
     await terminate(child, cancellation.signal ?? "SIGTERM");
@@ -403,14 +451,44 @@ function successfulPreflightEvidence(provider: Provider, model: string): string 
     : "authenticated";
 }
 
+const UNAVAILABLE_PATTERNS: readonly (readonly [ReceiptStatus, RegExp])[] = [
+  ["unauthenticated", /not logged in|unauthenticated|authentication|sign in|login required|401 Unauthorized/i],
+  ["usage-limited", /hit your usage limit|usage limit reached|usage_limit_reached|out of credits|quota exceeded|insufficient_quota|spend cap|upgrade to Plus/i],
+  ["rate-limited", /\b429\b|too many requests|rate[ _]limit/i],
+  ["unavailable-model", /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model|unsupported value:.{0,40}not supported with.{0,40}model/i],
+  ["unavailable-network", /waiting for network|error sending request|connection refused|connection reset|dns error|failed to lookup address|network is unreachable/i],
+];
+
 function unavailableStatus(value: string): ReceiptStatus {
-  if (/not logged in|unauthenticated|authentication|sign in|login required/i.test(value)) {
-    return "unauthenticated";
-  }
-  if (/model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)) {
-    return "unavailable-model";
+  for (const [status, pattern] of UNAVAILABLE_PATTERNS) {
+    if (pattern.test(value)) return status;
   }
   return "child-failed";
+}
+
+function codexNetworkWaitWatcher(): StdoutLineWatcher {
+  let hasProgress = false;
+  return (line) => {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      return false;
+    }
+    if (raw === null || typeof raw !== "object") return false;
+    const event = raw as Record<string, unknown>;
+    const item = event.item;
+    if (
+      event.type === "turn.completed" ||
+      ((event.type === "item.started" || event.type === "item.completed") &&
+        item !== null && typeof item === "object" &&
+        "type" in item && typeof item.type === "string" && item.type !== "error")
+    ) {
+      hasProgress = true;
+    }
+    return !hasProgress && event.type === "error" &&
+      typeof event.message === "string" && /waiting for network/i.test(event.message);
+  };
 }
 
 function preflightFailureStatus(
@@ -448,12 +526,17 @@ function statusExitCode(status: ReceiptStatus): number {
     case "malformed-output":
       return 65;
     case "unavailable-cli":
+    case "usage-limited":
     case "unavailable-model":
       return 69;
+    case "unavailable-network":
+      return 68;
     case "child-failed":
       return 70;
     case "unauthenticated":
       return 77;
+    case "rate-limited":
+      return 75;
     case "timed-out":
       return 124;
   }
@@ -781,7 +864,8 @@ async function executeLane(
     env,
     prompt,
     deadlineAt,
-    cancellation
+    cancellation,
+    options.provider === "codex" ? codexNetworkWaitWatcher() : undefined
   );
   const completed = Date.now();
   const base = {
@@ -795,14 +879,18 @@ async function executeLane(
     signal: result.signal,
   } as const;
 
-  if (result.cancelledBy !== null || result.timedOut || result.exitCode !== 0) {
+  if (result.cancelledBy !== null || result.timedOut || result.watcherStopped || result.exitCode !== 0) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
     const failureEvidence = evidence(rawFailureEvidence);
     const status: ReceiptStatus = result.cancelledBy !== null
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
-        : unavailableStatus(rawFailureEvidence);
+        : result.watcherStopped
+          ? "unavailable-network"
+          : unavailableStatus(options.provider === "codex"
+            ? codexFailureMessage(result.stdout) ?? rawFailureEvidence
+            : rawFailureEvidence);
     receipt = completeReceipt(options, {
       ...base,
       status,
@@ -819,7 +907,9 @@ async function executeLane(
             : `launcher received ${result.cancelledBy} after child exited`
           : result.timedOut
             ? `launcher exceeded the explicit ${options.timeoutMs}ms deadline`
-            : `child exited with status ${result.exitCode}`,
+            : result.watcherStopped
+              ? "Codex was waiting for the network before the model produced output"
+              : `child exited with status ${result.exitCode}`,
         evidence: failureEvidence,
       },
     });
