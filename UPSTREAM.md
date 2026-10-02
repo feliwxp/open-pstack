@@ -10,9 +10,9 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | Path | `pstack/` |
 | Commit | `12d587dfb20741cafc376c42c696c5f6e2a64487` |
 | Upstream version | `0.15.5` |
-| open-pstack version | `1.4.4-cursor.1` |
+| open-pstack version | `1.4.5-cursor.1` |
 
-The table above is the current Cursor sync point. Open Pstack 1.4.3-cursor.1 imports this 0.15.5 sync, and 1.4.4-cursor.1 adds a runner fix on the same sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.4.3-cursor.1 imports this 0.15.5 sync, 1.4.4-cursor.1 adds a runner fix on the same sync, and 1.4.5-cursor.1 adds the GPT-6.1 Sol family and named dropout statuses. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
