@@ -8,11 +8,11 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `12d587dfb20741cafc376c42c696c5f6e2a64487` |
-| Upstream version | `0.15.5` |
-| open-pstack version | `1.4.5-cursor.1` |
+| Commit | `e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a` |
+| Upstream version | `0.15.9` |
+| open-pstack version | `1.4.6-cursor.1` |
 
-The table above is the current Cursor sync point. Open Pstack 1.4.3-cursor.1 imports this 0.15.5 sync, 1.4.4-cursor.1 adds a runner fix on the same sync, and 1.4.5-cursor.1 adds the GPT-6.1 Sol family and named dropout statuses. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.4.6-cursor.1 imports the 0.15.6 through 0.15.9 changes. It retains the provider runner and dropout rules from the prior fork releases. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
@@ -22,6 +22,10 @@ The table above is the current Cursor sync point. Open Pstack 1.4.3-cursor.1 imp
 - The Claude manifest does not take the logo field from `efa2a53` because Claude Code has no schema for it. The shared asset is exposed through the Codex manifest instead.
 - The `12d587d` fallback that runs a rejected entry on its family's default, matched by `claude-`, `gpt-`, or `grok-` prefix, is not applied to `arena`, `architect`, `interrogate`, `how`, `why`, `reflect`, or `swarm`. `AGENTS.md` forbids a weaker-model fallback, and a provider-qualified entry such as `cursor:grok-4.7@xhigh` matches no prefix. An entry that cannot run stays a dropout under `provider-dispatch.md`.
 - The `12d587d` role lines `why investigators`, `why synthesizer`, `reflect tooling`, and `reflect judgment, divergent, synthesizer` are not applied. The port keeps its combined `why investigators, synthesizer` and `reflect tooling, judgment, divergent, synthesizer` lines, because every one of those roles stays on the parent for MCP access. The skills name the combined lines exactly, and setup drops only the retired `how critics` row.
+- The `23e4138` `disable-model-invocation: true` line on `principle-explain-the-number` is not applied. Principle leaves use `user-invocable: false` so other skills can read them by name.
+- The `23e4138` `disable-model-invocation: true` line on `benchmark-checklist` is not applied. Poteto-mode invokes it by name, and the flag blocks that route on Claude Code.
+- The `23e4138` expected-runtime stuck wording in the autopilot ticks is not applied. The fork retains handles and requires affirmative failure evidence. An hourly tick is an observation cadence, never a cancellation threshold.
+- The `23e4138` changes under `docs/guide/` are not mirrored. The guide teaches Cursor UI and cloud agents and remains upstream-only.
 
 ## Check for changes
 
@@ -35,8 +39,8 @@ Fetch and inspect only commits that touched pstack after the recorded sync point
 
 ```shell
 git fetch cursor main
-git log --oneline b42effe0aa50f59c693d7e2924714e015e00bf7c..cursor/main -- pstack
-git diff --stat b42effe0aa50f59c693d7e2924714e015e00bf7c..cursor/main -- pstack
+git log --oneline e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a..cursor/main -- pstack
+git diff --stat e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a..cursor/main -- pstack
 ```
 
 No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.

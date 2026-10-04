@@ -334,7 +334,7 @@ else
   note "ok: excluded upstream skills stay absent"
 fi
 
-routed_model_skills=(how why unslop typescript-best-practices)
+routed_model_skills=(how why unslop typescript-best-practices benchmark-checklist)
 routed_model_bad=""
 for name in "${routed_model_skills[@]}"; do
   routed_skill="$plugin/skills/$name/SKILL.md"
@@ -349,6 +349,24 @@ if [ -n "$routed_model_bad" ]; then
   fail=1
 else
   note "ok: routed skills stay model-invocable"
+fi
+
+audit_tick_bad=""
+for name in autopilot-full autopilot-stack multi-phase-plan; do
+  audit_playbook="$plugin/skills/poteto-mode/playbooks/$name.md"
+  if grep -Eq '30[- ]minute|/goal' "$audit_playbook"; then
+    audit_tick_bad="${audit_tick_bad}${name} has a 30-minute tick or /goal reference"$'\n'
+  fi
+  if ! grep -Fq '/loop 1h' "$audit_playbook"; then
+    audit_tick_bad="${audit_tick_bad}${name} lacks /loop 1h"$'\n'
+  fi
+done
+if [ -n "$audit_tick_bad" ]; then
+  note "FAIL: autopilot audits require hourly ticks without goals"
+  note "$audit_tick_bad"
+  fail=1
+else
+  note "ok: autopilot audits use hourly ticks without goals"
 fi
 
 # Upstream 0.15.3 puts every code delegate on Grok. Open Pstack follows it,
