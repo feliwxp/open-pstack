@@ -119,6 +119,10 @@ That is the main workflow. The other skills are there when poteto-mode needs the
 | `maintain-verification-skill` | The project's verification instructions no longer match the product. |
 | `babysit` | A pull request needs CI failures and review comments handled until it is ready. |
 | `reflect` | A hard task is finished and its lessons should improve the next run. |
+| `correct` | Agents repeat mistakes that the repo can prevent. |
+| `benchmark-checklist` | A measured speedup or regression needs evidence before you report it. |
+
+The 24 principle skills use `user-invocable: false`. Poteto-mode reads their index and applies them by name. [Explain the Number](plugins/pstack/skills/principle-explain-the-number/SKILL.md) is the new verification principle.
 
 Plugin skills include `pstack:` in their name. In Claude Code, invoke a native skill such as `/pstack:architect`. In Codex, ask for the skill, such as `Use pstack:architect for this design.` See the [technical reference](docs/reference.md) for the full list.
 
@@ -155,7 +159,7 @@ This repository also keeps:
 
 ## Staying close to Lauren's pstack
 
-Open Pstack 1.4.5-cursor.1 tracks pstack 0.15.5 at Cursor commit [`12d587dfb20741cafc376c42c696c5f6e2a64487`](https://github.com/cursor/plugins/commit/12d587dfb20741cafc376c42c696c5f6e2a64487).
+Open Pstack 1.4.6-cursor.1 tracks pstack 0.15.9 at Cursor commit [`e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a`](https://github.com/cursor/plugins/commit/e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a).
 
 The two projects have separate version numbers. The pstack version identifies Lauren's upstream content. The Open Pstack version identifies the Claude Code and Codex package built from it.
 

@@ -53,7 +53,7 @@ Some triggers name skills that ship with Claude Code, not pstack. They do not ex
 | `run` (drive a CLI/TUI to see a change work) | Run the app yourself via `shell` and observe the real output. |
 | `verify` (drive a UI to confirm a fix) | Drive the UI with whatever automation you have, or hand the user a concrete manual check. Do not claim done without observing the artifact. |
 | `plugin-dev:skill-development` (Claude's SKILL.md authoring guidance) | Follow your platform's skill-authoring guidance; the `writing-skills` skill if present. Keep `name` + `description` frontmatter and progressive disclosure. |
-| `loop` (recurring/self-paced re-invocation, used by `babysit`) | Codex has no `loop` skill. Re-run the step yourself on a cadence, or use a Codex scheduled task if available. |
+| `loop` (recurring/self-paced re-invocation, including `/loop 1h`) | Codex has no `loop` skill. Use a scheduled task when available. Otherwise keep the session active and use its clock and wait tools to run each audit tick every hour. Retain all delegated-work handles. The cadence never cancels delegated work. |
 
 ## Vendored scripts
 
