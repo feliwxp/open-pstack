@@ -14,8 +14,11 @@ pstack model choices are provider-qualified descriptors:
 | sol | gpt-5.6-sol-max | codex | gpt-6.1-sol | max | low medium high xhigh max ultra | - |
 | grok | grok-4.7-xhigh-fast | grok | grok-4.7 | xhigh | low medium high xhigh max | - |
 | opus | opus | claude | opus | max | low medium high xhigh max | opus |
+| cursor | grok-4.7-xhigh-fast | cursor | grok-4.7 | xhigh | low medium high xhigh | - |
 
 The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. A row offers `ultra` only when its CLI's model entry lists that effort; for Codex, that is the model's entry in `codex`'s model list. `gpt-6.1-sol` lists it. The Luna models and the Claude and Grok rows do not. First-run requested efforts are the Default effort cell of each row. The first-run panel is Opus, Sol, and Grok, in that order. Fable stays selectable, but no first-run role uses it. A Claude-native agent stem of `-` means the family has no Claude-native agent. Otherwise the shipped agent name is `pstack-<stem>-<effort>`.
+
+Cursor is an on-request family. Setup asks about it and probes it only when the loaded sheet or the operator names it. It has no first-run role. Cursor offers `low`, `medium`, `high`, and `xhigh` only. Requests for `max` or `ultra` are `unavailable-model` dropouts.
 
 `fable` and `opus` are Claude Code's rolling aliases. Claude resolves each alias to the latest available family revision. A runner receipt keeps the requested alias in `model` and the concrete provider-reported revision in `reportedModel`; verification accepts only a numeric `claude-fable-*` or `claude-opus-*` revision from the matching family.
 
@@ -29,14 +32,18 @@ This read-time rule makes an older installed sheet use the latest family revisio
 
 `fast` is part of Cursor's Grok selector, not a Grok Build CLI model or effort flag. The portable Grok route pins the current CLI model `grok-4.7`. The first-run Grok effort is `xhigh`.
 
+The `cursor` family reaches Grok through a Cursor subscription. The portable model name carries the speed tier. `cursor:grok-4.7@<effort>` selects `grok-4.7-<effort>`. `cursor:grok-4.7-fast@<effort>` selects `grok-4.7-<effort>-fast`. The matrix defaults to standard. A Fast request such as `cursor:grok-4.7-fast@xhigh` selects Cursor's higher-priced tier. The Grok 4.6 standard and Fast pair remain registered. Their ids retain the `cursor-` prefix.
+
+One registry in `runner/cursor-models.ts` holds each id and its reported display names. Grok 4.7 rows register both the `256K` stream form and the listing form with that slot blank. Verification strips zero-width characters, collapses whitespace, and trims both sides. Every remaining word must match. Preflight matches a whole listed id because a standard id prefixes its Fast twin.
+
 ## The parent owns the route
 
 The top-level harness resolves the route once. A child receives an assigned provider, model, effort, access mode, prompt, working directory, and output path. A child never detects the harness, chooses a provider, or launches another model. Environment markers may corroborate the top-level harness before fan-out, but nested processes inherit parent markers and must not use them for routing.
 
-| Parent | `claude:*` | `codex:*` | `grok:*` |
-|---|---|---|---|
-| Claude Code | native `Agent` | external runner | external runner |
-| Codex | external runner | native `spawn_agent` | external runner |
+| Parent | `claude:*` | `codex:*` | `grok:*` | `cursor:*` |
+|---|---|---|---|---|
+| Claude Code | native `Agent` | external runner | external runner | external runner |
+| Codex | external runner | native `spawn_agent` | external runner | external runner |
 
 `inherit-parent` and `auto` remain aliases. They use the parent's current model and effort through its native subagent primitive. In a panel they still consume one lane, but they reduce provider diversity; say so in the synthesis record.
 
@@ -56,7 +63,7 @@ The launcher lives at `skills/poteto-mode/scripts/runner/pstack-runner` under th
 ```text
 pstack-runner \
   --parent <claude|codex> \
-  --provider <claude|codex|grok> \
+  --provider <claude|codex|grok|cursor> \
   --model <real CLI model> \
   --effort <low|medium|high|xhigh|max|ultra> \
   --mode <read-only|isolated-write> \
@@ -68,6 +75,10 @@ pstack-runner \
 ```
 
 Pass arguments as an argv array or quote every path. Never interpolate prompt text into a shell command. The launcher preflights the assigned CLI and authentication, invokes the model exactly once, disables recursive agents and ambient skill dispatch where the CLI supports it, restricts the built-in tool surface, and records the exact provider/model/effort flags. External lanes do not receive the parent's MCP surface. Keep MCP-dependent Why and Reflect roles on `inherit-parent` or `auto`. The launcher never falls back.
+
+Every Codex lane starts with `--ignore-user-config` and `--disable apps` in both access modes. These flags remove the login's configured MCP servers and app connectors.
+
+Cursor uses `cursor-agent` in both parent harnesses. It has no flag to disable subagents, plugins, or rules. The lane prompt forbids recursive delegation. Cursor authentication is inferred from a successful model listing.
 
 Grok authentication preflight has one bounded retry. If the first `grok models` result would be classified as unauthenticated, the runner waits five seconds and tries the same preflight once more. A second failure is terminal. The delay and second attempt share the runner's absolute deadline and cancellation latch, and the receipt keeps evidence from both attempts. Model execution is never retried.
 
@@ -90,6 +101,8 @@ The runner and its preflight have no implicit timeout. Do not invent a duration 
 
 Read-only mode maps to Claude plan mode with project-only settings and an explicit tool list, Codex's read-only sandbox, and Grok auto mode plus its `read-only` sandbox and read-oriented tool list. Headless Grok cancels the whole turn on a permission prompt, which its `plan` mode raises for any shell command outside its built-in read-only list; auto mode reports a blocked call to the model instead. Grok's built-in read-only profile deliberately keeps its own state and system temporary directories writable, so point a read-only Grok lane at the actual checkout rather than a worktree under `/tmp`, `/var/tmp`, or the host's temporary directory. `isolated-write` maps to Claude `acceptEdits` with project-only settings, Codex `workspace-write`, and Grok auto mode plus its `workspace` sandbox and write-capable tool list. Grok uses auto mode in both access modes because `acceptEdits` raises the same turn-cancelling prompt for a shell command outside Grok's built-in list. Give every writer only a dedicated worktree or output directory. Never route a writer into the primary checkout.
 
+Cursor read-only mode uses `--mode plan` without `--force`. Cursor `isolated-write` uses default mode with `--force`. Both modes pass `--trust`. Neither passes `--approve-mcps`. Give each Cursor writer a dedicated worktree or output directory.
+
 Every concurrent external lane needs distinct prompt, output, and receipt paths. The launcher exclusively reserves the output, receipt, and `<receipt>.stdout` / `<receipt>.stderr` sidecars with private (`0600`) permissions and refuses to overwrite existing files. All these paths must be distinct from each other and the prompt; a failed reservation rolls back only files created by that attempt. Schema-version-1 receipts add nullable `stdoutPath` and `stderrPath` fields identifying reserved artifacts. Sidecars retain the model process's raw stdout/stderr bytes, including on dropouts; they do not include authentication-preflight output. Cancellation and timeout retain every byte captured before the drain stops. Keep these private local files with the receipt; quote only operator-selected excerpts in public evidence.
 
 ## Completion and dropouts
@@ -101,8 +114,30 @@ Success requires all of these:
 3. Either `modelVerified: true` with `modelEvidence: "provider-report"`, or a Codex receipt with `reportedModel: null`, `modelVerified: false`, and `modelEvidence: "pinned-argv"`. For Claude's `fable` and `opus` aliases, the concrete provider report must belong to the requested family. Codex 0.149.0 accepts the exact `--model` argument but does not report the served model in its JSONL stream.
 4. A non-empty output file.
 
+Cursor reports a display name in its stream's first event. The receipt preserves that name. Verification requires a registered name for the requested model, effort, and speed tier after normalization. Cursor has no `pinned-argv` escape.
+
 The receipt also carries elapsed time, token usage when the CLI exposes it, and cost when available. Keep it with the arena or review artifacts so parent-harness comparisons are evidence-based.
 
-Any missing CLI, failed login, unavailable model, explicit timeout, cancellation, catchable post-reservation launcher failure, non-zero child exit, malformed result, or model mismatch is a receipt-bearing dropout. Record it and apply the calling skill's existing dropout policy. A `cancelled` receipt can represent either a launcher signal or a well-formed Grok terminal cancellation. Provider cancellations return wrapper exit 130; other valid Grok terminal failures return `child-failed`/70, while invalid or incomplete terminal data remains `malformed-output`/65. These provider failures preserve the exact reason in `error.message`, put it first in bounded evidence, and retain reported model/session/usage/cost and the actual child exit code, even after an ordinary nonzero child exit. Missing provider metadata stays null. Launcher cancellation and timeout take precedence. The `signal` field is non-null only when the runner sent that signal to a still-active direct CLI child, and remains null for provider-only cancellation or when launcher cancellation only stopped a post-exit pipe drain. The provider CLI owns any processes it starts beneath that direct child; the receipt does not claim a process-tree kill. Do not delete or overwrite the receipt. Never substitute the parent model, retry another provider, or reinterpret an external descriptor as a native model slug.
+Any missing CLI, failed login, exhausted usage, rate limit, unavailable model, unreachable network, explicit timeout, cancellation, catchable post-reservation launcher failure, non-zero child exit, malformed result, or model mismatch is a receipt-bearing dropout. Record it and apply the calling skill's existing dropout policy. A `cancelled` receipt can represent either a launcher signal or a well-formed Grok terminal cancellation. Provider cancellations return wrapper exit 130; other valid Grok terminal failures return `child-failed`/70, while invalid or incomplete terminal data remains `malformed-output`/65. These provider failures preserve the exact reason in `error.message`, put it first in bounded evidence, and retain reported model/session/usage/cost and the actual child exit code, even after an ordinary nonzero child exit. Missing provider metadata stays null. Launcher cancellation and timeout take precedence. The `signal` field is non-null only when the runner sent that signal to a still-active direct CLI child, and remains null for provider-only cancellation or when launcher cancellation only stopped a post-exit pipe drain. The provider CLI owns any processes it starts beneath that direct child; the receipt does not claim a process-tree kill. Do not delete or overwrite the receipt. Never substitute the parent model, retry another provider, or reinterpret an external descriptor as a native model slug.
+
+| Receipt status | Exit | Cause |
+|---|---|---|
+| `complete` | 0 | The lane returned a verifiable result. |
+| `unavailable-cli` | 69 | The provider CLI is not on `PATH`. |
+| `unauthenticated` | 77 | The CLI is signed out or the provider refused authentication. |
+| `usage-limited` | 69 | The account exhausted its usage, credits, quota, or spend cap. |
+| `rate-limited` | 75 | The provider answered 429 after the CLI's retries. |
+| `unavailable-model` | 69 | The provider refused the model or its requested effort. |
+| `unavailable-network` | 68 | The CLI could not reach the provider. |
+| `timed-out` | 124 | The explicit `--timeout` deadline elapsed. |
+| `cancelled` | 130 | The launcher received a signal or the provider reported cancellation. |
+| `child-failed` | 70 | The child failed for another reason. |
+| `malformed-output` | 65 | The child returned no verifiable result. |
+
+Report a dropout by its receipt status name. The runner classifies a failed Codex lane from its `turn.failed` message or its last `error` event. Earlier model text cannot decide its status. Other providers retain their existing failure handling.
+
+The failure fixtures come from Codex CLI 0.160.0. Signed-out, unknown-model, unsupported-effort, and refused-connection fixtures were captured live. Usage-limit and rate-limit fixtures use the binary's strings. Triggering those limits would spend the account's quota.
+
+Codex emits `Reconnecting... waiting for network` after its connection retries and then waits. Before any non-error item, that event stops the child with SIGTERM and writes `unavailable-network`. Once an item or a completed turn establishes progress, later network waits remain with Codex. This rule uses failure evidence. It has no timer.
 
 Start native and external lanes in the same fan-out phase, then wait for all of them before judging. A judge must not read candidate paths while their owners are still writing.

@@ -51,9 +51,11 @@ One distinct effort per family is the current value. A family with no non-alias 
 
 Ask one effort question for each assigned family. Name each model, its current or proposed value, and the Selectable efforts from its matrix row. Empty input keeps that value. On a first run, state the assigned families' matrix defaults before asking. On a rerun, state the parsed values without offering to reset customized role lanes.
 
+Cursor is an on-request family. Ask its effort question only when the loaded sheet or the operator's request names that family. Its standard and Fast model names belong to the same matrix row. Preserve the selected speed tier when changing effort. Do not offer it to an operator who did not name it.
+
 ### 5. Probe the requested pairs
 
-Before any external CLI availability/authentication check or model probe, resolve the selected families through this parent's route table. On a Codex parent, name the assigned external families (Claude Fable, Claude Opus, and/or Grok) and inspect the parent's effective permission instructions for network access and the actual credential/state paths those CLIs need, including any required outside-workspace writes. Do not inspect credential contents or attempt a denied write to establish permission. `CODEX_SANDBOX_NETWORK_DISABLED=1` in the parent's own environment is evidence that external CLI network access is disabled; inspect it before child-environment scrubbing. `CODEX_SANDBOX` identifies a sandbox backend, not a complete permission policy. Missing markers, a config-file preference, or the name `workspace-write` alone do not prove sufficient access. Use the effective session permissions and required paths, not a blanket ban on every path outside the workspace.
+Before any external CLI availability/authentication check or model probe, resolve the selected families through this parent's route table. On a Codex parent, name the assigned external families from the route table and inspect the parent's effective permission instructions for network access and the actual credential/state paths those CLIs need, including any required outside-workspace writes. Do not inspect credential contents or attempt a denied write to establish permission. `CODEX_SANDBOX_NETWORK_DISABLED=1` in the parent's own environment is evidence that external CLI network access is disabled; inspect it before child-environment scrubbing. `CODEX_SANDBOX` identifies a sandbox backend, not a complete permission policy. Missing markers, a config-file preference, or the name `workspace-write` alone do not prove sufficient access. Use the effective session permissions and required paths, not a blanket ban on every path outside the workspace.
 
 If required access is blocked, explain the affected assigned families and the restriction before invoking their CLIs. If permission information is unavailable or incomplete, call it **unknown**, say which required access cannot be established, and resolve it before external checks or probes. Offer exactly two paths when access is blocked or remains unknown:
 
@@ -64,6 +66,8 @@ If all chosen families are native, no external CLI permission check or probe is 
 
 Probe only the selected `provider:model@effort` pair of each assigned family. Run one probe per family in the role map, even when two families share a provider. Do not enumerate or offer older models as substitutes. A failed probe writes nothing: report the failing pair and provider, stop, and keep the active sheet plus parent integration bytes unchanged. A failed first run creates neither artifact.
 
+Report a failed lane by its receipt status name. This includes `usage-limited`, `rate-limited`, and `unavailable-network`. Keep the existing configuration unchanged.
+
 If a Grok probe fails because the host cannot enforce its bounded sandbox, see [Host and parent prerequisites](../poteto-mode/references/provider-dispatch.md#host-and-parent-prerequisites); keep the active configuration unchanged.
 
 | Family | Pair source | Claude parent route | Codex parent route | Availability proof |
@@ -72,6 +76,7 @@ If a Grok probe fails because the host cannot enforce its bounded sandbox, see [
 | Sol | Sol matrix row + selected effort | `codex exec` | native `spawn_agent` | `codex login status` plus one-turn probe or native one-turn probe |
 | Grok | Grok matrix row + selected effort | Grok CLI | Grok CLI | `grok models` must list the requested model; one-turn probe |
 | Opus | Opus matrix row + selected effort | native Agent `pstack-opus-<effort>` | Claude CLI | native one-turn probe or `claude auth status --json` plus one-turn probe |
+| Cursor, on request | Cursor matrix row + selected effort | Cursor CLI | Cursor CLI | `cursor-agent models` must list the requested Cursor model id; one-turn probe |
 
 Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model and effort flags run. Record native and external results separately. Never call the external launcher for the parent's own provider. On a Claude parent, the Fable and Opus probes are one-turn runs of the mapped `pstack-<stem>-<effort>` agent. On a Codex parent, the Sol probe is native `spawn_agent` with the selected `reasoning_effort`. Every other pair uses the external runner with the selected effort flag.
 

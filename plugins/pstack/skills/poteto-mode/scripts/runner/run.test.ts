@@ -27,13 +27,14 @@ function streamPath(path: string | null): string {
 }
 
 const fake = `#!/usr/bin/env bun
-import { appendFileSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const name = process.argv[1].split("/").at(-1);
 const isPreflight =
   (name === "claude" && args[0] === "auth") ||
   (name === "codex" && args[0] === "login") ||
-  (name === "grok" && args[0] === "models");
+  (name === "grok" && args[0] === "models") ||
+  (name === "cursor-agent" && args[0] === "models");
 const stage = isPreflight ? "preflight" : "model";
 const startedPath = isPreflight
   ? process.env.FAKE_PREFLIGHT_STARTED_PATH
@@ -98,6 +99,22 @@ if (name === "grok" && args[0] === "models") {
   console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
   process.exit(0);
 }
+if (name === "cursor-agent" && args[0] === "models") {
+  if (process.env.FAKE_CURSOR_UNAUTH === "1") {
+    console.error("Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.");
+    process.exit(1);
+  }
+  const fastRow = "cursor-grok-4.6-xhigh-fast - Cursor Grok 4.6 Extra High Fast";
+  const offered = process.env.FAKE_CURSOR_MISSING_MODEL === "1"
+    ? "cursor-grok-4.6-low - Cursor Grok 4.6 Low"
+    : process.env.FAKE_CURSOR_ONLY_FAST === "1"
+      ? fastRow
+      : "cursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High\\n" + fastRow +
+        "\\ngrok-4.7-xhigh - Grok 4.7  Extra High" +
+        "\\ngrok-4.7-xhigh-fast - Grok 4.7  Extra High Fast\\u200b\\u200b";
+  console.log("Available models\\n\\nauto - Auto (default)\\n" + offered);
+  process.exit(0);
+}
 const modelIndex = args.findIndex((value) => value === "--model");
 const model = modelIndex >= 0 ? args[modelIndex + 1] : "unknown";
 const reportedModel = model === "fable"
@@ -108,6 +125,40 @@ const reportedModel = model === "fable"
 if (process.env.FAKE_INVALID_MODEL === "1") {
   console.error("The requested model is not supported with this account.");
   process.exit(1);
+}
+if (process.env.FAKE_FAILURE_TEXT) {
+  console.error(process.env.FAKE_FAILURE_TEXT);
+  process.exit(1);
+}
+if (name === "codex" && process.env.FAKE_CODEX_FIXTURE) {
+  const fixturePath = process.env.FAKE_CODEX_FIXTURE;
+  const fixture = readFileSync(fixturePath, "utf8");
+  const waitsForever = fixturePath.endsWith("/network-wait.jsonl");
+  if (waitsForever) {
+    process.on("SIGTERM", () => {
+      if (process.env.FAKE_TERMINATED_PATH) {
+        writeFileSync(process.env.FAKE_TERMINATED_PATH, "SIGTERM");
+      }
+      process.exit(1);
+    });
+  }
+  console.error("Codex fixture stderr");
+  if (process.env.FAKE_CODEX_CHUNKED === "1") {
+    for (let offset = 0; offset < fixture.length; offset += 17) {
+      process.stdout.write(fixture.slice(offset, offset + 17));
+      await Bun.sleep(1);
+    }
+  } else {
+    process.stdout.write(fixture);
+  }
+  if (waitsForever) {
+    const waitingLine = fixture.trim().split("\\n").at(-1);
+    while (true) {
+      await Bun.sleep(50);
+      process.stdout.write(waitingLine + "\\n");
+    }
+  }
+  process.exit(Number(process.env.FAKE_CODEX_FIXTURE_EXIT_CODE ?? 1));
 }
 if (stage === "model" && process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS) {
   const seconds = Number(process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS) / 1000;
@@ -125,7 +176,23 @@ if (stage === "model" && process.env.FAKE_SELF_SIGNAL) {
   process.kill(process.pid, process.env.FAKE_SELF_SIGNAL);
   await Bun.sleep(5_000);
 }
-if (name === "claude") {
+if (name === "cursor-agent") {
+  const displayNames = {
+    "cursor-grok-4.6-low": "Grok 4.6 Low",
+    "cursor-grok-4.6-medium": "Grok 4.6 Medium",
+    "cursor-grok-4.6-high": "Grok 4.6",
+    "cursor-grok-4.6-xhigh": "Grok 4.6 Extra High",
+    "cursor-grok-4.6-low-fast": "Grok 4.6 Low Fast",
+    "cursor-grok-4.6-medium-fast": "Grok 4.6 Medium Fast",
+    "cursor-grok-4.6-high-fast": "Grok 4.6 Fast",
+    "cursor-grok-4.6-xhigh-fast": "Grok 4.6 Extra High Fast",
+    "grok-4.7-xhigh": "Grok 4.7 256K Extra High",
+    "grok-4.7-xhigh-fast": "Grok 4.7 256K  Extra High Fast\\u200b\\u200b",
+  };
+  const served = process.env.FAKE_CURSOR_SERVED_MODEL || displayNames[model];
+  console.log(JSON.stringify({type:"system",subtype:"init",apiKeySource:"login",session_id:"u1",model:served,permissionMode:"default"}));
+  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"CURSOR_OK",session_id:"u1",request_id:"r1",usage:{inputTokens:40,outputTokens:6,cacheReadTokens:8,cacheWriteTokens:2}}));
+} else if (name === "claude") {
   console.log(JSON.stringify({result:"CLAUDE_OK",session_id:"c1",usage:{input_tokens:10,output_tokens:2},total_cost_usd:0.01,modelUsage:{[reportedModel]:{}}}));
 } else if (name === "codex") {
   console.log(JSON.stringify({type:"thread.started",thread_id:"o1"}));
@@ -161,7 +228,7 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
     parent,
     provider,
     model,
-    effort: provider === "grok" ? "xhigh" : "max",
+    effort: provider === "grok" || provider === "cursor" ? "xhigh" : "max",
     mode: "read-only",
     promptPath: join(scratch, "prompt.md"),
     cwd: scratch,
@@ -174,6 +241,21 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
 function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
 }
+
+function codexFixture(name: string): string {
+  return join(import.meta.dir, "fixtures/codex-0.160.0", `${name}.jsonl`);
+}
+
+function codexScenario(events: readonly unknown[]): void {
+  const path = join(scratch, "codex-scenario.jsonl");
+  writeFileSync(path, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+  process.env.FAKE_CODEX_FIXTURE = path;
+}
+
+const CODEX_NETWORK_WAIT = {
+  type: "error",
+  message: "Reconnecting... waiting for network (Connection failed: error sending request)",
+} as const;
 
 function runnerArgs(input: RunnerOptions): string[] {
   const args = [
@@ -235,7 +317,7 @@ beforeEach(() => {
   bin = join(scratch, "bin");
   mkdirSync(bin);
   writeFileSync(join(scratch, "prompt.md"), "Return the marker.");
-  for (const name of ["claude", "codex", "grok"]) makeExecutable(name);
+  for (const name of ["claude", "codex", "grok", "cursor-agent"]) makeExecutable(name);
   previousPath = process.env.PATH;
   process.env.PATH = `${bin}:${dirname(process.execPath)}:${previousPath ?? ""}`;
   delete process.env.FAKE_TIMEOUT;
@@ -257,10 +339,18 @@ beforeEach(() => {
   delete process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH;
   delete process.env.FAKE_GROK_PREFLIGHT_LOG_PATH;
   delete process.env.FAKE_GROK_MISSING_MODEL;
+  delete process.env.FAKE_CURSOR_UNAUTH;
+  delete process.env.FAKE_CURSOR_MISSING_MODEL;
+  delete process.env.FAKE_CURSOR_ONLY_FAST;
+  delete process.env.FAKE_CURSOR_SERVED_MODEL;
   delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
   delete process.env.FAKE_DESCENDANT_PID_PATH;
   delete process.env.FAKE_SELF_SIGNAL;
   delete process.env.FAKE_GROK_ERROR_RESULT;
+  delete process.env.FAKE_CODEX_FIXTURE;
+  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
+  delete process.env.FAKE_CODEX_CHUNKED;
+  delete process.env.FAKE_FAILURE_TEXT;
 });
 
 afterEach(() => {
@@ -284,10 +374,18 @@ afterEach(() => {
   delete process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH;
   delete process.env.FAKE_GROK_PREFLIGHT_LOG_PATH;
   delete process.env.FAKE_GROK_MISSING_MODEL;
+  delete process.env.FAKE_CURSOR_UNAUTH;
+  delete process.env.FAKE_CURSOR_MISSING_MODEL;
+  delete process.env.FAKE_CURSOR_ONLY_FAST;
+  delete process.env.FAKE_CURSOR_SERVED_MODEL;
   delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
   delete process.env.FAKE_DESCENDANT_PID_PATH;
   delete process.env.FAKE_SELF_SIGNAL;
   delete process.env.FAKE_GROK_ERROR_RESULT;
+  delete process.env.FAKE_CODEX_FIXTURE;
+  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
+  delete process.env.FAKE_CODEX_CHUNKED;
+  delete process.env.FAKE_FAILURE_TEXT;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -769,7 +867,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     });
   }
 
-  for (const provider of ["claude", "codex", "grok"] as const) {
+  for (const provider of ["claude", "codex", "grok", "cursor"] as const) {
     it(`executes and receipts the ${provider} external lane`, async () => {
       const input = options(provider);
       const result = await runLane(input);
@@ -808,6 +906,174 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
       modelVerified: false,
       modelEvidence: "pinned-argv",
     });
+  });
+
+  for (const [name, status, exitCode] of [
+    ["signed-out", "unauthenticated", 77],
+    ["usage-limit", "usage-limited", 69],
+    ["rate-limit", "rate-limited", 75],
+    ["unknown-model", "unavailable-model", 69],
+    ["unsupported-effort", "unavailable-model", 69],
+  ] as const) {
+    it(`classifies the Codex ${name} fixture as ${status}`, async () => {
+      process.env.FAKE_CODEX_FIXTURE = codexFixture(name);
+      const input = options("codex");
+      const result = await runLane(input);
+      expect(result.exitCode).toBe(exitCode);
+      expect(existsSync(input.outputPath)).toBe(false);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status,
+        exitCode: 1,
+        signal: null,
+        preflight: { status: "passed" },
+        error: {
+          evidence: `Codex fixture stderr\n\n${readFileSync(codexFixture(name), "utf8").trim()}`,
+        },
+      });
+    });
+  }
+
+  for (const chunked of [false, true]) {
+    it(`stops Codex network-wait before progress without a timeout${chunked ? " across split stdout lines" : ""}`, async () => {
+      process.env.FAKE_CODEX_FIXTURE = codexFixture("network-wait");
+      if (chunked) process.env.FAKE_CODEX_CHUNKED = "1";
+      const started = join(scratch, "network-child.pid");
+      const terminated = join(scratch, "network-child.terminated");
+      process.env.FAKE_MODEL_STARTED_PATH = started;
+      process.env.FAKE_TERMINATED_PATH = terminated;
+      const input = options("codex");
+      expect(input.timeoutMs).toBeNull();
+      expect(runnerArgs(input)).not.toContain("--timeout");
+      const lane = runLane(input);
+      const result = await Promise.race([lane, Bun.sleep(3_000).then(() => null)]);
+      if (result === null) {
+        // Bound only the test, and reap the fake so a red run cannot leak it.
+        process.kill(Number(readFileSync(started, "utf8")), "SIGKILL");
+        await lane;
+        throw new Error("Codex network-wait lane did not finish within 3000ms");
+      }
+      expect(result.exitCode).toBe(68);
+      expect(existsSync(input.outputPath)).toBe(false);
+      expect(readFileSync(terminated, "utf8")).toBe("SIGTERM");
+      expect(processIsAlive(Number(readFileSync(started, "utf8")))).toBe(false);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "unavailable-network",
+        signal: "SIGTERM",
+        preflight: { status: "passed" },
+        error: {
+          message: "Codex was waiting for the network before the model produced output",
+        },
+      });
+      expect(result.receipt.error?.evidence).toContain("Codex fixture stderr");
+      expect(result.receipt.error?.evidence).toContain(
+        readFileSync(codexFixture("network-wait"), "utf8").trim()
+      );
+      expect(result.receipt.elapsedMs).toBeLessThan(3_000);
+    }, 6_000);
+  }
+
+  it("allows Codex to complete after an agent message and a later network wait", async () => {
+    codexScenario([
+      { type: "item.completed", item: { type: "agent_message", text: "CODEX_OK" } },
+      CODEX_NETWORK_WAIT,
+      { type: "turn.completed", usage: { input_tokens: 20, output_tokens: 3 } },
+    ]);
+    process.env.FAKE_CODEX_FIXTURE_EXIT_CODE = "0";
+    const input = options("codex");
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "complete",
+      signal: null,
+      usage: { inputTokens: 20, outputTokens: 3 },
+    });
+    expect(readFileSync(input.outputPath, "utf8")).toBe("CODEX_OK");
+  });
+
+  it("lets Codex own network waits after item.started or turn.completed progress", async () => {
+    process.env.FAKE_CODEX_FIXTURE_EXIT_CODE = "0";
+    const results = [];
+    for (const progress of [
+      { type: "item.started", item: { type: "command_execution", command: "pwd" } },
+      { type: "turn.completed" },
+    ]) {
+      codexScenario([
+        progress,
+        CODEX_NETWORK_WAIT,
+        { type: "item.completed", item: { type: "agent_message", text: "CODEX_OK" } },
+        { type: "turn.completed" },
+      ]);
+      const result = await runLane(options("codex", progress.type));
+      results.push([result.receipt.status, result.exitCode, result.receipt.signal]);
+    }
+    expect(results).toEqual([["complete", 0, null], ["complete", 0, null]]);
+  });
+
+  it("classifies Codex turn.failed instead of earlier rate limit and authentication text", async () => {
+    const path = join(scratch, "codex-agent-text.jsonl");
+    writeFileSync(path, `${JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "Earlier rate limit and authentication discussion" },
+    })}\n${readFileSync(codexFixture("unknown-model"), "utf8")}`);
+    process.env.FAKE_CODEX_FIXTURE = path;
+    const input = options("codex");
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(69);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "unavailable-model" });
+    expect(result.receipt.error?.evidence).toContain("Earlier rate limit and authentication discussion");
+    expect(result.receipt.error?.evidence).toContain("gpt-6.1-sol-nope");
+  });
+
+  it("classifies ordered failure patterns without hex-id or content-filter false positives", async () => {
+    const cases = [
+      ["401 Unauthorized; quota exceeded", "unauthenticated", 77],
+      ["hit your usage limit", "usage-limited", 69],
+      ["Usage limit reached", "usage-limited", 69],
+      ["usage_limit_reached; 429 Too Many Requests", "usage-limited", 69],
+      ["out of credits", "usage-limited", 69],
+      ["quota exceeded", "usage-limited", 69],
+      ["insufficient_quota", "usage-limited", 69],
+      ["spend cap", "usage-limited", 69],
+      ["Upgrade to Plus", "usage-limited", 69],
+      ["unexpected status 429", "rate-limited", 75],
+      ["Too many requests", "rate-limited", 75],
+      ["rate limit; model not supported", "rate-limited", 75],
+      ["RATE_LIMIT", "rate-limited", 75],
+      ["The 'gpt-6.1-sol-nope' model is not supported; connection reset", "unavailable-model", 69],
+      ["Unsupported value: 'max' is not supported with the 'gpt-5.5' model.", "unavailable-model", 69],
+      ["waiting for network", "unavailable-network", 68],
+      ["error sending request", "unavailable-network", 68],
+      ["Connection refused", "unavailable-network", 68],
+      ["connection reset", "unavailable-network", 68],
+      ["DNS error", "unavailable-network", 68],
+      ["failed to lookup address", "unavailable-network", 68],
+      ["network is unreachable", "unavailable-network", 68],
+      ["cf-ray: a429bee-SIN, request id: req_abc429def", "child-failed", 70],
+      ["stream disconnected before completion: content filter stop", "child-failed", 70],
+    ] as const;
+    const results = [];
+    for (const [index, [message]] of cases.entries()) {
+      codexScenario([{ type: "turn.failed", error: { message } }]);
+      const result = await runLane(options("codex", `pattern-${index}`));
+      results.push([message, result.receipt.status, result.exitCode]);
+    }
+    expect(results).toEqual(cases.map((entry) => [...entry]));
+  }, 10_000);
+
+  it("classifies combined failure output for other providers and Codex without JSON events", async () => {
+    process.env.FAKE_FAILURE_TEXT = "401 Unauthorized";
+    const results = [];
+    for (const provider of ["claude", "codex", "grok", "cursor"] as const) {
+      const result = await runLane(options(provider));
+      results.push([provider, result.receipt.status, result.exitCode]);
+      expect(result.receipt.error?.evidence).toBe("401 Unauthorized");
+    }
+    expect(results).toEqual([
+      ["claude", "unauthenticated", 77],
+      ["codex", "unauthenticated", 77],
+      ["grok", "unauthenticated", 77],
+      ["cursor", "unauthenticated", 77],
+    ]);
   });
 
   it("keeps Grok's terminal cancellation reason in bounded evidence", async () => {
@@ -1044,6 +1310,218 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     expect(receipt(input.receiptPath)).toMatchObject({
       status: "unavailable-model",
       preflight: { status: "failed" },
+    });
+  });
+
+  it("classifies a Cursor login failure without running the model", async () => {
+    process.env.FAKE_CURSOR_UNAUTH = "1";
+    const modelStarted = join(scratch, "cursor-unauth-model.started");
+    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    const input = options("cursor", "cursor-unauthenticated");
+    const result = await runLane(input);
+
+    expect(result.exitCode).toBe(77);
+    expect(existsSync(modelStarted)).toBe(false);
+    expect(existsSync(input.outputPath)).toBe(false);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "unauthenticated",
+      preflight: { status: "failed" },
+    });
+    expect(receipt(input.receiptPath).preflight.evidence).toContain(
+      "Authentication required"
+    );
+  });
+
+  it("classifies a Cursor model the account is not offered", async () => {
+    process.env.FAKE_CURSOR_MISSING_MODEL = "1";
+    const modelStarted = join(scratch, "cursor-missing-model.started");
+    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    const input = options("cursor", "cursor-missing-model");
+    const result = await runLane(input);
+
+    expect(result.exitCode).toBe(69);
+    expect(existsSync(modelStarted)).toBe(false);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "unavailable-model",
+      preflight: { status: "failed" },
+    });
+  });
+
+  it("refuses a standard Cursor row that only the fast twin lists", async () => {
+    process.env.FAKE_CURSOR_ONLY_FAST = "1";
+    const modelStarted = join(scratch, "cursor-only-fast.started");
+    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    const input = options("cursor", "cursor-only-fast");
+    const result = await runLane(input);
+
+    expect(result.exitCode).toBe(69);
+    expect(existsSync(modelStarted)).toBe(false);
+    expect(existsSync(input.outputPath)).toBe(false);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "unavailable-model",
+      preflight: { status: "failed" },
+    });
+    expect(receipt(input.receiptPath).preflight.evidence).toContain(
+      "cursor-grok-4.6-xhigh-fast"
+    );
+  });
+
+  for (const effort of ["max", "ultra"] as const) {
+    it(`refuses Cursor ${effort} before any preflight`, async () => {
+      const preflightStarted = join(scratch, `cursor-${effort}-preflight.started`);
+      process.env.FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
+      const input = {
+        ...options("cursor", `cursor-${effort}`),
+        effort,
+      };
+      const result = await runLane(input);
+
+      expect(result.exitCode).toBe(69);
+      expect(existsSync(preflightStarted)).toBe(false);
+      expect(existsSync(input.outputPath)).toBe(false);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "unavailable-model",
+        model: "grok-4.6",
+        effort,
+        argv: [],
+        preflight: { status: "not-run" },
+        modelVerified: false,
+        modelEvidence: null,
+        error: { message: `cursor does not offer grok-4.6 at effort ${effort}` },
+      });
+    });
+  }
+
+  it("refuses a Cursor effort with no model row before any preflight", async () => {
+    const preflightStarted = join(scratch, "cursor-max-preflight.started");
+    process.env.FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
+    const input = {
+      ...options("cursor", "cursor-max"),
+      effort: "max" as const,
+    };
+    const result = await runLane(input);
+
+    expect(result.exitCode).toBe(69);
+    expect(existsSync(preflightStarted)).toBe(false);
+    expect(existsSync(input.outputPath)).toBe(false);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "unavailable-model",
+      model: "grok-4.6",
+      effort: "max",
+      argv: [],
+      preflight: { status: "not-run" },
+      modelVerified: false,
+      modelEvidence: null,
+      error: { message: "cursor does not offer grok-4.6 at effort max" },
+    });
+  });
+
+  it("verifies the Cursor lane against the display name of the requested model", async () => {
+    const matched = options("cursor", "cursor-verified");
+    expect((await runLane(matched)).exitCode).toBe(0);
+    expect(receipt(matched.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.6 Extra High",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+      sessionId: "u1",
+      usage: {
+        inputTokens: 40,
+        outputTokens: 6,
+        cachedInputTokens: 8,
+        cacheCreationInputTokens: 2,
+      },
+      costUsd: null,
+    });
+    expect(receipt(matched.receiptPath).argv).toContain("cursor-grok-4.6-xhigh");
+    expect(receipt(matched.receiptPath).argv).not.toContain(
+      "cursor-grok-4.6-xhigh-fast"
+    );
+
+    const fast = { ...options("cursor", "cursor-fast"), model: "grok-4.6-fast" };
+    expect((await runLane(fast)).exitCode).toBe(0);
+    expect(receipt(fast.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.6 Extra High Fast",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+    expect(receipt(fast.receiptPath).argv).toContain("cursor-grok-4.6-xhigh-fast");
+  });
+
+  it("verifies a Grok 4.7 lane whose served name has Cursor's odd spacing", async () => {
+    const standard = { ...options("cursor", "cursor-4.7"), model: "grok-4.7" };
+    expect((await runLane(standard)).exitCode).toBe(0);
+    expect(receipt(standard.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.7 256K Extra High",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+    expect(receipt(standard.receiptPath).argv).toContain("grok-4.7-xhigh");
+    expect(receipt(standard.receiptPath).argv).not.toContain("grok-4.7-xhigh-fast");
+
+    const fast = { ...options("cursor", "cursor-4.7-fast"), model: "grok-4.7-fast" };
+    expect((await runLane(fast)).exitCode).toBe(0);
+    expect(receipt(fast.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.7 256K  Extra High Fast\u200b\u200b",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+    expect(receipt(fast.receiptPath).argv).toContain("grok-4.7-xhigh-fast");
+  });
+
+  it("verifies a Grok 4.7 lane whose stream reports the listing name", async () => {
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.7  Extra High";
+    const listed = { ...options("cursor", "cursor-4.7-listed"), model: "grok-4.7" };
+    expect((await runLane(listed)).exitCode).toBe(0);
+    expect(receipt(listed.receiptPath)).toMatchObject({
+      status: "complete",
+      reportedModel: "Grok 4.7  Extra High",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+    });
+
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.7  Extra High Fast​​";
+    const fastServed = { ...options("cursor", "cursor-4.7-fast-served"), model: "grok-4.7" };
+    expect((await runLane(fastServed)).exitCode).toBe(65);
+    expect(existsSync(fastServed.outputPath)).toBe(false);
+    expect(receipt(fastServed.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      modelVerified: false,
+      error: { message: "requested model grok-4.7 was not reported by cursor" },
+    });
+  });
+
+  it("refuses a Cursor lane served the other speed tier's display name", async () => {
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High Fast";
+    const mismatched = options("cursor", "cursor-mismatched");
+    const result = await runLane(mismatched);
+    expect(result.exitCode).toBe(65);
+    expect(existsSync(mismatched.outputPath)).toBe(false);
+    expect(receipt(mismatched.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: null,
+      error: { message: "requested model grok-4.6 was not reported by cursor" },
+    });
+
+    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High";
+    const reversed = {
+      ...options("cursor", "cursor-reversed"),
+      model: "grok-4.6-fast",
+    };
+    expect((await runLane(reversed)).exitCode).toBe(65);
+    expect(existsSync(reversed.outputPath)).toBe(false);
+    expect(receipt(reversed.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      reportedModel: null,
+      modelVerified: false,
+      error: {
+        message: "requested model grok-4.6-fast was not reported by cursor",
+      },
     });
   });
 
@@ -1531,6 +2009,10 @@ describe("childEnvironment", () => {
       KEEP_ME: "yes",
     });
     expect(childEnvironment("grok", source)).toEqual({
+      PATH: "/bin",
+      KEEP_ME: "yes",
+    });
+    expect(childEnvironment("cursor", source)).toEqual({
       PATH: "/bin",
       KEEP_ME: "yes",
     });

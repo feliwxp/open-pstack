@@ -45,4 +45,17 @@ describe("runner CLI parsing", () => {
     const args = argv().map((value) => (value === "max" ? "ultra" : value));
     expect(parseArgs(args)?.effort).toBe("ultra");
   });
+
+  it("accepts cursor as a provider but never as a parent", () => {
+    const parsed = parseArgs([
+      ...argv().slice(0, 2),
+      "--provider",
+      "cursor",
+      ...argv().slice(4),
+    ]);
+    expect(parsed?.provider).toBe("cursor");
+    expect(() =>
+      parseArgs(["--parent", "cursor", ...argv().slice(2)])
+    ).toThrow("parent must be one of: claude, codex");
+  });
 });

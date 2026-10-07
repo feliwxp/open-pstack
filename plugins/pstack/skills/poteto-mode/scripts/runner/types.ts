@@ -1,5 +1,5 @@
 export const PARENTS = ["claude", "codex"] as const;
-export const PROVIDERS = ["claude", "codex", "grok"] as const;
+export const PROVIDERS = ["claude", "codex", "grok", "cursor"] as const;
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const ACCESS_MODES = ["read-only", "isolated-write"] as const;
 
@@ -26,7 +26,10 @@ export type ReceiptStatus =
   | "cancelled"
   | "unavailable-cli"
   | "unauthenticated"
+  | "usage-limited"
+  | "rate-limited"
   | "unavailable-model"
+  | "unavailable-network"
   | "timed-out"
   | "child-failed"
   | "malformed-output";
@@ -86,3 +89,5 @@ export interface RunnerReceipt {
 }
 
 export class UsageError extends Error {}
+
+export class UnavailableModelError extends Error {}

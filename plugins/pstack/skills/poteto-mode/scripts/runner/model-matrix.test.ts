@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { cursorModel } from "./cursor-models.ts";
 import { EFFORTS, type Effort } from "./types.ts";
 
 const PLUGIN_ROOT = join(import.meta.dir, "../../../..");
@@ -21,11 +22,11 @@ const MATRIX_HEADER = [
   "Claude-native agent stem",
 ] as const;
 
-const FAMILY_ORDER = ["fable", "sol", "grok", "opus"] as const;
+const FAMILY_ORDER = ["fable", "sol", "grok", "opus", "cursor"] as const;
 const FIRST_RUN_PANEL = ["opus", "sol", "grok"] as const;
-const PROVIDERS = ["claude", "codex", "grok"] as const;
+const PROVIDERS = ["claude", "codex", "grok", "cursor"] as const;
 const DESCRIPTOR_RE =
-  /(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)/g;
+  /(claude|codex|grok|cursor):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)/g;
 const PANEL_ROLES = [
   "arena runners",
   "arena cross-judge pool",
@@ -107,9 +108,9 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
     .slice(start + 1, end)
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"));
-  if (table.length !== 6) {
+  if (table.length !== 2 + FAMILY_ORDER.length) {
     throw new Error(
-      `model matrix must be header, separator, and 4 data rows, got ${table.length}`
+      `model matrix must be header, separator, and ${FAMILY_ORDER.length} data rows, got ${table.length}`
     );
   }
   const header = splitRow(table[0]);
@@ -228,6 +229,7 @@ describe("model matrix", () => {
       ["sol", "max"],
       ["grok", "xhigh"],
       ["opus", "max"],
+      ["cursor", "xhigh"],
     ]);
     expect(
       rows
@@ -305,6 +307,37 @@ describe("model matrix", () => {
       .filter((name) => name.startsWith("pstack-") && name.endsWith(".md"))
       .sort();
     expect(shipped).toEqual([...expected].sort());
+  });
+
+  it("binds the Cursor matrix row to the shipped model registry", () => {
+    const cursor = rows.find((row) => row.family === "cursor");
+    if (cursor === undefined) {
+      throw new Error("missing cursor matrix row");
+    }
+    expect(cursor.provider).toBe("cursor");
+    expect(cursor.model).not.toContain("fast");
+    const fastModel = `${cursor.model}-fast`;
+    for (const effort of EFFORTS) {
+      if (cursor.selectableEfforts.includes(effort)) {
+        expect(cursorModel(cursor.model, effort).id).toBe(
+          `${cursor.model}-${effort}`
+        );
+        expect(cursorModel(fastModel, effort).id).toBe(
+          `${cursor.model}-${effort}-fast`
+        );
+      } else {
+        expect(() => cursorModel(cursor.model, effort)).toThrow(
+          `cursor does not offer ${cursor.model} at effort ${effort}`
+        );
+        expect(() => cursorModel(fastModel, effort)).toThrow(
+          `cursor does not offer ${fastModel} at effort ${effort}`
+        );
+      }
+    }
+    const dispatch = readFileSync(DISPATCH_PATH, "utf8");
+    expect(dispatch).toContain(`\`cursor:${cursor.model}@<effort>\``);
+    expect(dispatch).toContain(`\`cursor:${fastModel}@<effort>\``);
+    expect(dispatch).toContain(`\`cursor:${fastModel}@${cursor.defaultEffort}\``);
   });
 
   it("keeps setup's first-run default panel copy aligned with the matrix", () => {
@@ -386,4 +419,136 @@ describe("model matrix", () => {
     expect(normalization).toContain("`/setup-pstack` will rewrite it");
     expect(normalization).toContain("runner rejects a missed Fable or Opus version pin");
   });
+});
+
+const OWNER_SHEET = `feature, refactoring: codex:gpt-6.1-sol@xhigh
+bug-fix: codex:gpt-6.1-sol@xhigh
+perf-issue: codex:gpt-6.1-sol@xhigh
+hillclimb: codex:gpt-6.1-sol@xhigh
+judgment and prose: claude:opus@xhigh
+hardest tasks: claude:fable@xhigh
+how explorer: codex:gpt-6.1-sol@xhigh
+how explainer: codex:gpt-6.1-sol@xhigh
+why investigators, synthesizer: inherit-parent
+reflect tooling, judgment, divergent, synthesizer: inherit-parent
+arena runners: claude:fable@xhigh, codex:gpt-6.1-sol@xhigh
+arena cross-judge pool: codex:gpt-6.1-sol@xhigh, claude:fable@xhigh
+swarm workers: codex:gpt-6.1-sol@xhigh
+architect runners: claude:fable@xhigh, codex:gpt-6.1-sol@xhigh
+interrogate reviewers: claude:fable@xhigh, codex:gpt-6.1-sol@xhigh
+`;
+
+const ROUTED_SKILL_LINES: Record<string, string[]> = {
+  how: ["how explorer", "how explainer"],
+  why: ["why investigators, synthesizer"],
+  reflect: ["reflect tooling, judgment, divergent, synthesizer"],
+  arena: ["arena runners", "arena cross-judge pool"],
+  architect: ["architect runners", "arena runners"],
+  interrogate: ["interrogate reviewers"],
+  swarm: ["swarm workers"],
+};
+
+const ALIASES = ["inherit-parent", "auto"] as const;
+
+function parseSheet(text: string): Map<string, string[]> {
+  const roles = new Map<string, string[]>();
+  for (const line of text.split("\n")) {
+    const idx = line.indexOf(": ");
+    if (idx < 0 || line.startsWith("budget: ")) {
+      continue;
+    }
+    const role = line.slice(0, idx);
+    if (roles.has(role)) {
+      throw new Error(`duplicate sheet role: ${role}`);
+    }
+    roles.set(role, line.slice(idx + 2).split(", "));
+  }
+  return roles;
+}
+
+function resolveEntry(entry: string, rows: MatrixRow[]): string {
+  if ((ALIASES as readonly string[]).includes(entry)) {
+    return entry;
+  }
+  const match = entry.match(/^([a-z]+):([a-z0-9.-]+)@([a-z]+)$/);
+  if (match === null) {
+    throw new Error(`not a provider:model@effort descriptor: ${entry}`);
+  }
+  const [, provider, model, effort] = match;
+  const row = rows.find(
+    (candidate) =>
+      candidate.provider === provider &&
+      (candidate.model === model ||
+        (provider === "cursor" && model === `${candidate.model}-fast`))
+  );
+  if (row === undefined) {
+    throw new Error(`no matrix family for ${entry}`);
+  }
+  if (!row.selectableEfforts.includes(asEffort(effort))) {
+    throw new Error(`${entry}: ${effort} is not selectable for ${row.family}`);
+  }
+  return row.family;
+}
+
+function citedLines(text: string): string[] {
+  const cited = new Set<string>();
+  for (const pattern of [
+    /the `([^`]+)` (?:line|descriptor)/g,
+    /(?:Use|from) `([^`]+)` (?:from|in)/g,
+    /in place of Arena's `([^`]+)`/g,
+    /^\| \w+ \| `([^`]+)` \|/gm,
+  ]) {
+    for (const match of text.matchAll(pattern)) cited.add(match[1]);
+  }
+  return [...cited].sort();
+}
+
+describe("routed skills read the owner's model sheet", () => {
+  const rows = parseModelMatrix(readFileSync(DISPATCH_PATH, "utf8"));
+  const setup = readFileSync(SETUP_PATH, "utf8");
+  const owner = parseSheet(OWNER_SHEET);
+  const skill = (name: string) =>
+    readFileSync(join(PLUGIN_ROOT, "skills", name, "SKILL.md"), "utf8");
+
+  it("keeps every owner line in setup's role map, so setup neither drops nor rejects one", () => {
+    expect([...owner.keys()]).toEqual([...parseSheet(firstRunSheet(setup)).keys()]);
+
+  });
+
+  it("resolves every owner entry to its matrix family", () => {
+    const families = new Map<string, string[]>();
+    for (const [role, entries] of owner) {
+      families.set(role, entries.map((entry) => resolveEntry(entry, rows)));
+    }
+    expect(families.get("swarm workers")).toEqual(["sol"]);
+    expect(families.get("arena runners")).toEqual(["fable", "sol"]);
+    expect(families.get("why investigators, synthesizer")).toEqual(["inherit-parent"]);
+  });
+
+  it("names only lines the owner's sheet carries, so no combined line reaches a default", () => {
+    for (const [name, expected] of Object.entries(ROUTED_SKILL_LINES)) {
+      const cited = citedLines(skill(name));
+      expect({ name, cited }).toEqual({ name, cited: [...expected].sort() });
+      for (const line of cited) {
+        expect({ name, line, present: owner.has(line) }).toEqual({
+          name,
+          line,
+          present: true,
+        });
+      }
+    }
+    const poteto = skill("poteto-mode");
+    for (const role of [
+      "feature, refactoring",
+      "bug-fix",
+      "perf-issue",
+      "hillclimb",
+      "hardest tasks",
+      "judgment and prose",
+    ]) {
+      expect(poteto).toContain(`\`${role}\``);
+      expect(owner.has(role)).toBe(true);
+    }
+  });
+
 });

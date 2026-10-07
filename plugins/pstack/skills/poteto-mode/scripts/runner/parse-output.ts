@@ -1,4 +1,6 @@
+import { cursorModel, reportsCursorModel } from "./cursor-models.ts";
 import type {
+  Effort,
   NormalizedUsage,
   ParsedOutput,
   Provider,
@@ -39,14 +41,14 @@ function normalizedUsage(value: unknown): NormalizedUsage | null {
   const usage = object(value);
   if (usage === null) return null;
   const result: NormalizedUsage = {
-    inputTokens: finiteNumber(usage.input_tokens),
+    inputTokens: finiteNumber(usage.input_tokens ?? usage.inputTokens),
     cachedInputTokens: finiteNumber(
-      usage.cached_input_tokens ?? usage.cache_read_input_tokens
+      usage.cached_input_tokens ?? usage.cache_read_input_tokens ?? usage.cacheReadTokens
     ),
     cacheCreationInputTokens: finiteNumber(
-      usage.cache_creation_input_tokens ?? usage.cache_write_input_tokens
+      usage.cache_creation_input_tokens ?? usage.cache_write_input_tokens ?? usage.cacheWriteTokens
     ),
-    outputTokens: finiteNumber(usage.output_tokens),
+    outputTokens: finiteNumber(usage.output_tokens ?? usage.outputTokens),
     reasoningTokens: finiteNumber(
       usage.reasoning_tokens ?? usage.reasoning_output_tokens
     ),
@@ -146,6 +148,62 @@ function parseGrok(stdout: string, requestedModel: string): ParsedOutput {
   return { text, ...metadata };
 }
 
+function parseCursor(stdout: string): ParsedOutput {
+  let reportedModel: string | null = null;
+  let result: JsonObject | null = null;
+  for (const line of stdout.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      throw new Error("cursor emitted a non-JSON event");
+    }
+    const event = object(raw);
+    if (event?.type === "system" && event.subtype === "init") {
+      reportedModel = nullableString(event.model) ?? reportedModel;
+    }
+    if (event?.type === "result") result = event;
+  }
+
+  if (result === null) {
+    throw new Error("cursor result did not contain a terminal event");
+  }
+  if (result.is_error === true || result.subtype !== "success") {
+    throw new Error("cursor reported an error result");
+  }
+  const text = nullableString(result.result);
+  if (text === null) throw new Error("cursor result did not contain final text");
+
+  return {
+    text,
+    reportedModel,
+    sessionId: nullableString(result.session_id),
+    usage: normalizedUsage(result.usage),
+    costUsd: null,
+  };
+}
+
+export function codexFailureMessage(stdout: string): string | null {
+  let turnFailure: string | null = null;
+  let errorMessage: string | null = null;
+  for (const line of stdout.split("\n")) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const event = object(raw);
+    if (event?.type === "turn.failed") {
+      turnFailure = nullableString(object(event.error)?.message);
+    } else if (event?.type === "error") {
+      errorMessage = nullableString(event.message);
+    }
+  }
+  return turnFailure ?? errorMessage;
+}
+
 function parseCodex(stdout: string): ParsedOutput {
   let text: string | null = null;
   let usage: NormalizedUsage | null = null;
@@ -202,15 +260,21 @@ export function parseProviderOutput(
       return parseCodex(stdout);
     case "grok":
       return parseGrok(stdout, requestedModel);
+    case "cursor":
+      return parseCursor(stdout);
   }
 }
 
 export function reportedModelMatches(
   provider: Provider,
   requested: string,
-  reported: string | null
+  reported: string | null,
+  effort: Effort = "max"
 ): boolean {
   if (reported === null) return false;
+  if (provider === "cursor") {
+    return reportsCursorModel(reported, cursorModel(requested, effort));
+  }
   if (provider === "claude" && isRollingClaudeAlias(requested)) {
     return concreteModelMatchesRollingAlias(requested, reported);
   }

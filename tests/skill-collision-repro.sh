@@ -131,7 +131,32 @@ else
   note "ok: setup config-home port invariant; unset/empty defaults and spaced overrides resolve without writes"
 fi
 
-quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
+quad_of() { { grep -oE '(claude|codex|grok|cursor):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
+cursor_bad=""
+for rule in \
+  '| cursor | grok-4.7-xhigh-fast | cursor | grok-4.7 | xhigh | low medium high xhigh | - |' \
+  'Cursor is an on-request family.' \
+  '| Parent | `claude:*` | `codex:*` | `grok:*` | `cursor:*` |' \
+  'Cursor uses `cursor-agent` in both parent harnesses.' \
+  'Cursor read-only mode uses `--mode plan` without `--force`.' \
+  'Cursor `isolated-write` uses default mode with `--force`.' \
+  'Cursor has no `pinned-argv` escape.'; do
+  grep -Fq "$rule" "$dispatch" || cursor_bad="${cursor_bad}dispatch lacks $rule"$'\n'
+done
+for rule in \
+  'Ask its effort question only when the loaded sheet or the operator' \
+  '| Cursor, on request |'; do
+  grep -Fq "$rule" "$setup" || cursor_bad="${cursor_bad}setup lacks $rule"$'\n'
+done
+grep -Fq 'or `cursor-agent` executable' "$config_mapping" || cursor_bad="${cursor_bad}tool mapping lacks cursor-agent"$'\n'
+if [ -n "$cursor_bad" ]; then
+  note "FAIL: Cursor provider mapping regressed"
+  note "$cursor_bad"
+  fail=1
+else
+  note "ok: Cursor provider remains on request with its external routes and access modes"
+fi
+
 canon_panel="$( { grep -m1 '^arena runners:' "$setup" || true; } | quad_of)"
 panel_bad=""
 [ -n "$canon_panel" ] || panel_bad="could not read the canonical panel from $setup"$'\n'
