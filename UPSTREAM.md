@@ -19,14 +19,17 @@ The release row names the followed version. The version row names this fork's pa
 - **Cursor provider.** The runner, registry, tests, and dispatch documentation add an on-request Cursor lane. The fork keeps subscription routing and exact display-name verification. Remove this difference when open-pstack carries the same provider contract.
 - **Named dropouts.** The runner, fixtures, tests, and dispatch documentation name usage, rate, and network failures. The fork keeps terminal-message classification and the network-wait stop rule. Remove this difference when open-pstack carries those statuses and that rule.
 - **Codex MCP isolation.** Codex argv and its test disable user configuration and app connectors. The dispatch reference records the boundary. The fork keeps lanes free of the login's MCP tools. Remove this difference when open-pstack enforces the same boundary.
-- **Owner's-sheet test.** The matrix test holds the owner's role names and family assignments. It rejects missing roles, unknown cited lines, and unresolved entries. The fork keeps this regression guard. Remove it when open-pstack covers that sheet contract.
+- **Owner's-sheet test.** The matrix test holds the owner's role names and family assignments. It rejects missing roles, unknown cited lines, and unresolved entries. It also rejects skill text that moves a configured entry to a default by its model-name prefix. The fork keeps this regression guard. Remove it when open-pstack covers that sheet contract.
 - **Fork instructions.** `AGENTS.md` keeps the fork's review and live-evidence rules. The fork has no Mergify queue and no `live-gate` status. Remove this difference when the fork adopts open-pstack's review and gate workflow.
 - **Pull request template.** `.github/pull_request_template.md` records installed-candidate live evidence in the pull request body. It keeps the fork's gate reviewable without a separate status. Remove this difference when the fork adopts open-pstack's gate publication workflow.
 - **Release records.** The versioned manifests, README, reference page, changelog, and this file identify the fork release and its retained differences. They keep provenance and the merge procedure visible. Remove them when the fork ends or becomes identical to the followed release.
+- **No open-pstack verifier.** The fork deletes `.claude/skills/verify-open-pstack` and its Codex link at `.agents/skills/verify-open-pstack`. That skill hard-codes `ericlitman/open-pstack`. It comments and sets `live-gate` on pull requests there from the operator's login. `tests/skill-collision-repro.sh` fails when either path returns. During a merge, keep both paths deleted. Remove this difference when the skill takes its repository from the checkout and the fork adopts open-pstack's gate publication workflow.
 - **Ledger guard.** `scripts/fork-ledger.sh` checks the differing paths against the block below. The fork keeps it to catch accidental ports and stale entries. Remove it when the fork ends or open-pstack provides the same guard.
 
 ```fork-paths
+.agents/skills/verify-open-pstack
 .claude-plugin/marketplace.json
+.claude/skills/verify-open-pstack/
 .github/pull_request_template.md
 AGENTS.md
 CHANGES.md
@@ -59,6 +62,9 @@ tests/skill-collision-repro.sh
 - **Separate Sol family.** The fork drops its `sol-6.1` matrix row. Open-pstack's `sol` row already uses the same model and offers `ultra`. The owner loses no sheet resolution or model choice.
 - **Cursor 0.15.3 and 0.15.5 ports.** The fork drops its copies of those ports. Open-pstack carries the same Cursor commits through its own port. Its defaults, setup flow, skill text, and exclusions win. The fork loses its setup budget question and other local choices where the ports differ.
 - **Cursor 0.15.6 through 0.15.9 port.** The fork drops `benchmark-checklist`, `correct`, and `principle-explain-the-number`. It also drops that port's fresh-task rule, hourly audits, PR headings, design red flags, performance mantras, and related edits. Those features wait for open-pstack's port. The full port stays in git history at `c82ccf9`.
+- **No-substitute sentence in `how`, `why`, and `reflect`.** The fork drops its sentence that a descriptor which cannot run is a dropout, never a reason to switch models. `provider-dispatch.md` still states the rule, and the runner still enforces it.
+- **Arena seat wording.** The fork drops its sentence that a configured arena entry which cannot run never moves its seat to another model. Open-pstack's text forbids a silent replacement with another provider. It does not name a second model from the same provider.
+- **Codex failure with no failure event.** A failed Codex lane that emits no failure event and prints its reason only on stdout now ends `child-failed`. The fork classified that stdout text into a named status. Open-pstack classifies only stderr in that case.
 
 ## Check for changes
 
