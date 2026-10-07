@@ -1,5 +1,49 @@
 # CHANGES — applied substitutions
 
+## 1.5.0-fel.1 follows open-pstack
+
+The fork now follows `ericlitman/open-pstack` 1.5.0. Open-pstack follows Cursor.
+
+The fork keeps the Cursor provider and its display-name registry. It keeps named usage, rate, and network dropouts. Codex lanes start without the login's MCP tools. The owner's-sheet test keeps the role map and family resolution covered.
+
+The separate `sol-6.1` family is gone. Open-pstack's Sol row already resolves the owner's sheet and offers `ultra`. Its Fable row and agents remain unchanged.
+
+The fork's Cursor 0.15.3 and 0.15.5 ports are replaced by open-pstack's port. The Cursor 0.15.6 through 0.15.9 port is dropped. This removes `benchmark-checklist`, `correct`, and `principle-explain-the-number` until open-pstack carries them. The port remains in git history at `c82ccf9`.
+
+The fork records live evidence in the pull request body. It has no Mergify queue or `live-gate` status. The open-pstack release notes below remain its historical record.
+
+## 1.4.7-cursor.1 starts Codex lanes without the login's MCP tools
+
+Codex lanes inherited the login's MCP servers and app connectors. Disabling plugins did not remove them. An owner's read-only lane held 384 MCP tools and completed a call. Those servers ran outside the sandbox.
+
+Every Codex lane now gets `--ignore-user-config` and `--disable apps` in both access modes. The first flag skips the user configuration. The second removes account app connectors. Authentication still reads `CODEX_HOME`. A measured lane on CLI 0.160.0 held zero MCP tools.
+
+The lane also stops reading other user configuration keys. The runner pins model, effort, sandbox, and working directory in argv. Custom providers and profiles from that file no longer reach a lane.
+
+## 1.4.5-cursor.1 adds GPT-6.1 Sol and names every lane dropout
+
+The retained part of this release names every lane dropout. It adds `usage-limited` with exit 69, `rate-limited` with exit 75, and `unavailable-network` with exit 68. The dispatch reference lists the statuses and their causes.
+
+Codex failure classification uses its terminal failure message. Earlier model text cannot choose the status. Fixtures under `runner/fixtures/codex-0.160.0/` capture signed-out, unknown-model, unsupported-effort, and refused-connection failures. Usage and rate fixtures use strings from the CLI binary. Triggering those limits would spend quota.
+
+Codex waits after `Reconnecting... waiting for network`. Before any non-error item, the runner stops the child and writes `unavailable-network`. A later wait remains with Codex after progress. The rule has no timer.
+
+## 1.4.4-cursor.1 verifies both Grok 4.7 display names
+
+Cursor's stream reports either the `256K` name or the listing name with that slot blank. The runner had registered only the first. A run under the other name became `malformed-output`.
+
+Each Grok 4.7 registry row now holds both names. Verification normalizes whitespace and zero-width characters. Every remaining word must match. Efforts, generations, and speed tiers remain distinct.
+
+## Unreleased: cursor joins the model matrix as an on-request family
+
+The runner adds Cursor as an external provider for both parents. It keeps the parent's route decision and rejects same-provider recursion. Cursor offers the same weights through a Cursor subscription.
+
+One typed registry binds each portable model and effort to a Cursor id and display name. The standard model is the default. The Fast model is a separate requested tier. Both Grok 4.6 names remain registered. Grok 4.7 ids omit the older `cursor-` prefix.
+
+Preflight matches a whole listed id. A Fast-only listing cannot satisfy a standard request. Display verification uses equality after normalization. Cursor has no `pinned-argv` escape. Unoffered efforts produce `unavailable-model` before a CLI call.
+
+Read-only uses `--mode plan`. Isolated writes use `--force`. Both use `--trust` and omit `--approve-mcps`. Cursor has no flag to disable recursive agents, plugins, or rules. Setup touches this family only when the sheet or operator names it.
+
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 

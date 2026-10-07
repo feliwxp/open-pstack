@@ -1,6 +1,94 @@
 # Upstream synchronization
 
-open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main/pstack) while adapting Cursor-specific primitives for Claude Code and Codex.
+This fork follows [ericlitman/open-pstack](https://github.com/ericlitman/open-pstack). Open-pstack follows Cursor's pstack. Take upstream content from open-pstack.
+
+## Fork sync point
+
+| Source | Value |
+| --- | --- |
+| Repository | `https://github.com/ericlitman/open-pstack.git` |
+| Branch | `main` |
+| open-pstack commit | `1b03678171f6f400ae2cc9dc4e7a4a6a13e4bb43` |
+| open-pstack release | `1.5.0` |
+| open-pstack version | `1.5.0-fel.1` |
+
+The release row names the followed version. The version row names this fork's package version. The commit row is labelled `open-pstack commit` so that it never reads as the Cursor `Commit` row in open-pstack's record below.
+
+## Fork ledger
+
+- **Cursor provider.** The runner, registry, tests, and dispatch documentation add an on-request Cursor lane. The fork keeps subscription routing and exact display-name verification. Remove this difference when open-pstack carries the same provider contract.
+- **Named dropouts.** The runner, fixtures, tests, and dispatch documentation name usage, rate, and network failures. The fork keeps terminal-message classification and the network-wait stop rule. Remove this difference when open-pstack carries those statuses and that rule.
+- **Codex MCP isolation.** Codex argv and its test disable user configuration and app connectors. The dispatch reference records the boundary. The fork keeps lanes free of the login's MCP tools. Remove this difference when open-pstack enforces the same boundary.
+- **Owner's-sheet test.** The matrix test holds the owner's role names and family assignments. It rejects missing roles, unknown cited lines, and unresolved entries. The fork keeps this regression guard. Remove it when open-pstack covers that sheet contract.
+- **Fork instructions.** `AGENTS.md` keeps the fork's review and live-evidence rules. The fork has no Mergify queue and no `live-gate` status. Remove this difference when the fork adopts open-pstack's review and gate workflow.
+- **Pull request template.** `.github/pull_request_template.md` records installed-candidate live evidence in the pull request body. It keeps the fork's gate reviewable without a separate status. Remove this difference when the fork adopts open-pstack's gate publication workflow.
+- **Release records.** The versioned manifests, README, reference page, changelog, and this file identify the fork release and its retained differences. They keep provenance and the merge procedure visible. Remove them when the fork ends or becomes identical to the followed release.
+- **Ledger guard.** `scripts/fork-ledger.sh` checks the differing paths against the block below. The fork keeps it to catch accidental ports and stale entries. Remove it when the fork ends or open-pstack provides the same guard.
+
+```fork-paths
+.claude-plugin/marketplace.json
+.github/pull_request_template.md
+AGENTS.md
+CHANGES.md
+README.md
+UPSTREAM.md
+docs/reference.md
+plugins/pstack/.claude-plugin/plugin.json
+plugins/pstack/.codex-plugin/plugin.json
+plugins/pstack/skills/poteto-mode/references/codex-tools.md
+plugins/pstack/skills/poteto-mode/references/provider-dispatch.md
+plugins/pstack/skills/poteto-mode/scripts/runner/cli.test.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/cli.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/commands.test.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/commands.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/cursor-models.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/fixtures/codex-0.160.0/
+plugins/pstack/skills/poteto-mode/scripts/runner/model-matrix.test.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/parse-output.test.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/parse-output.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/run.test.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/run.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/types.ts
+plugins/pstack/skills/setup-pstack/SKILL.md
+scripts/fork-ledger.sh
+tests/skill-collision-repro.sh
+```
+
+## Dropped at 1.5.0-fel.1
+
+- **Separate Sol family.** The fork drops its `sol-6.1` matrix row. Open-pstack's `sol` row already uses the same model and offers `ultra`. The owner loses no sheet resolution or model choice.
+- **Cursor 0.15.3 and 0.15.5 ports.** The fork drops its copies of those ports. Open-pstack carries the same Cursor commits through its own port. Its defaults, setup flow, skill text, and exclusions win. The fork loses its setup budget question and other local choices where the ports differ.
+- **Cursor 0.15.6 through 0.15.9 port.** The fork drops `benchmark-checklist`, `correct`, and `principle-explain-the-number`. It also drops that port's fresh-task rule, hourly audits, PR headings, design red flags, performance mantras, and related edits. Those features wait for open-pstack's port. The full port stays in git history at `c82ccf9`.
+
+## Check for changes
+
+Add the upstream remote once in a fresh clone.
+
+```shell
+git remote add upstream https://github.com/ericlitman/open-pstack.git
+```
+
+Fetch the followed branch and inspect commits after the recorded sync point.
+
+```shell
+git fetch upstream main
+git log --oneline 1b03678171f6f400ae2cc9dc4e7a4a6a13e4bb43..upstream/main
+```
+
+Work is tracked in the fork's own GitHub Issues. Never push to or open a pull request against `ericlitman/open-pstack`.
+
+## Incorporate a change
+
+1. Create or update an issue in `feliwxp/open-pstack`. Branch from the fork's current `main`.
+2. Fetch `upstream main` and read each change after the recorded commit.
+3. Run `git merge upstream/main`. Take open-pstack's side for conflicts outside the ledger's paths. Inside those paths, use open-pstack's text as the base and graft only each retained difference.
+4. Bump the fork to `<new open-pstack version>-fel.1`. Update the recorded commit and followed release. Update the ledger for the resulting diff.
+5. Run the local gates and `bash scripts/fork-ledger.sh`. Test the installed exact candidate from each affected harness's real user surface. Record the installed version, surface, action, and result in the pull request body.
+6. Keep the pull request as a draft until that evidence exists. Land the upstream merge as a merge commit. Never squash it. A squash drops open-pstack's history, so the next merge would conflict again from the old base.
+
+## Open-pstack's record
+
+The sections below are open-pstack's own Cursor record. Preserve them during later merges.
 
 ## Current sync point
 
@@ -28,32 +116,3 @@ The table above is the current Cursor sync point. Open Pstack 1.5.0 imports this
 ## Local port-patch ledger
 
 - **#120 — harness config homes** (tracked for #105): Cursor's setup destination is `~/.cursor/rules/`. The shared port resolves nonempty `CLAUDE_CONFIG_DIR` / `CODEX_HOME`, otherwise `$HOME/.claude` / `$HOME/.codex`, once at `plugins/pstack/skills/poteto-mode/references/codex-tools.md#harness-config-homes`. `setup-pstack/SKILL.md` reuses that home for reads, sheet/integration writes, snapshots, restoration, and readback; Claude preserves the literal legacy import at the default home and renders exactly `@./pstack-models.md` for redirected homes, keeping spaces and `#` in the config-directory name out of the import line; reruns replace the one import whose target basename is `pstack-models.md`, append if absent, and stop if duplicated. Preserve this intentional divergence during upstream syncs. The named config-home invariant in `tests/skill-collision-repro.sh` rejects literal default destinations outside the legacy import, requires the literal default-home rendering and zero/one/many import rules, and verifies unset/empty/space-containing resolution without daily writes. See `CHANGES.md` for the port correction and `tests/setup-config-home-repro.sh` for redirected live-evidence preparation. The Cursor sync point is unchanged.
-
-## Check for changes
-
-The repository already names Cursor's repository as the `cursor` remote in the maintainer checkout. A fresh clone can add it once:
-
-```shell
-git remote add cursor https://github.com/cursor/plugins.git
-```
-
-Fetch and inspect only commits that touched pstack after the recorded sync point:
-
-```shell
-git fetch cursor main
-git log --oneline 12d587dfb20741cafc376c42c696c5f6e2a64487..cursor/main -- pstack
-git diff --stat 12d587dfb20741cafc376c42c696c5f6e2a64487..cursor/main -- pstack
-```
-
-No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.
-
-## Incorporate a change
-
-1. Create or update a GitHub issue in `ericlitman/open-pstack` and branch from current `main`.
-2. Read each upstream pstack commit in order. Bring over its intent and content, then apply only the Claude Code and Codex substitutions documented in `CHANGES.md`.
-3. Keep one shared `plugins/pstack/skills/` tree. Put harness translation in the existing `codex-tools.md` and provider routing in `provider-dispatch.md`; do not fork a skill per harness.
-4. Update the commit and version in this file, the affected provenance rows in `NOTICE.md`, and `README-UPSTREAM.md` when upstream changes it.
-5. Run CI-equivalent checks locally, then run the installed Claude Code and Codex behavioral lanes required by the changed surface. Unit tests alone are not a release gate.
-6. Merge the reviewed PR before tagging the next open-pstack release.
-
-Cursor's version and open-pstack's version are independent. Cursor's version identifies the imported content; open-pstack's version identifies the cross-harness distribution.

@@ -37,11 +37,19 @@ verof() { { grep -m1 '"version"' "$1" || true; } | sed -E 's/.*"version"[[:space
 vc="$(verof "$repo/plugins/pstack/.claude-plugin/plugin.json")"
 vx="$(verof "$repo/plugins/pstack/.codex-plugin/plugin.json")"
 vm="$(verof "$repo/.claude-plugin/marketplace.json")"
-vu="$(sed -n 's/| open-pstack version | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md")"
+vu="$(sed -n 's/| open-pstack version | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md" | head -n 1)"
 if [ -n "$vc" ] && [ "$vc" = "$vx" ] && [ "$vc" = "$vm" ] && [ "$vc" = "$vu" ]; then
   note "ok: open-pstack version matches across UPSTREAM.md and the 3 manifests ($vc)"
 else
   note "FAIL: open-pstack version differs: upstream=$vu claude-plugin=$vc codex-plugin=$vx marketplace=$vm"
+  fail=1
+fi
+
+vr="$(sed -n 's/| open-pstack release | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md")"
+if [ -n "$vr" ] && [[ "$vc" == "$vr"-fel.* ]] && [[ "${vc#"$vr"-fel.}" =~ ^[0-9]+$ ]]; then
+  note "ok: fork version follows the open-pstack release ($vc)"
+else
+  note "FAIL: fork version must be $vr-fel.<n> ($vc)"
   fail=1
 fi
 
