@@ -12,6 +12,10 @@ The fork's Cursor 0.15.3 and 0.15.5 ports are replaced by open-pstack's port. Th
 
 The fork records live evidence in the pull request body. It has no Mergify queue or `live-gate` status. The open-pstack release notes below remain its historical record.
 
+The fork does not carry open-pstack's repository-local `verify-open-pstack` skill. That skill comments and sets `live-gate` on `ericlitman/open-pstack` pull requests from the operator's login. The static invariants now fail when the skill or its Codex link returns.
+
+The matrix test again rejects skill text that moves a configured entry to a default by its model-name prefix. `UPSTREAM.md` names the no-substitute wording and the Codex failure case that this release lost.
+
 ## 1.4.7-cursor.1 starts Codex lanes without the login's MCP tools
 
 Codex lanes inherited the login's MCP servers and app connectors. Disabling plugins did not remove them. An owner's read-only lane held 384 MCP tools and completed a call. Those servers ran outside the sandbox.
@@ -44,7 +48,6 @@ Preflight matches a whole listed id. A Fast-only listing cannot satisfy a standa
 
 Read-only uses `--mode plan`. Isolated writes use `--force`. Both use `--trust` and omit `--approve-mcps`. Cursor has no flag to disable recursive agents, plugins, or rules. Setup touches this family only when the sheet or operator names it.
 
-Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
 ## Unreleased

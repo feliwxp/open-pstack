@@ -551,4 +551,13 @@ describe("routed skills read the owner's model sheet", () => {
     }
   });
 
+  it("never moves a configured entry to a default by its model-name prefix", () => {
+    for (const name of readdirSync(join(PLUGIN_ROOT, "skills"))) {
+      const text = skill(name);
+      expect({ name, prefixFallback: /Families go by prefix|its family's default|table default of its family/.test(text) }).toEqual({
+        name,
+        prefixFallback: false,
+      });
+    }
+  });
 });
