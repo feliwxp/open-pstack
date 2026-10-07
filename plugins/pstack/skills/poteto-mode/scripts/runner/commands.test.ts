@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { invocationCommand } from "./commands.ts";
-import type { Effort, RunnerOptions } from "./types.ts";
+import { ACCESS_MODES, type Effort, type RunnerOptions } from "./types.ts";
 
 function options(overrides: Partial<RunnerOptions> = {}): RunnerOptions {
   return {
@@ -35,6 +35,9 @@ describe("invocationCommand", () => {
       "/tmp/worktree",
       "--skip-git-repo-check",
       "--ephemeral",
+      "--ignore-user-config",
+      "--disable",
+      "apps",
       "--disable",
       "plugins",
       "--disable",
@@ -65,6 +68,9 @@ describe("invocationCommand", () => {
       "/tmp/worktree",
       "--skip-git-repo-check",
       "--ephemeral",
+      "--ignore-user-config",
+      "--disable",
+      "apps",
       "--disable",
       "plugins",
       "--disable",
@@ -76,6 +82,15 @@ describe("invocationCommand", () => {
       "--json",
       "-",
     ]);
+  });
+
+  it("starts every Codex lane without the user's config or app connectors", () => {
+    for (const mode of ACCESS_MODES) {
+      const { args } = invocationCommand(options({ mode }));
+      const disabled = args.filter((_, index) => args[index - 1] === "--disable");
+      expect(args, mode).toContain("--ignore-user-config");
+      expect(disabled, mode).toContain("apps");
+    }
   });
 
   it("passes Claude model, effort, permissions, and no-recursion controls", () => {
