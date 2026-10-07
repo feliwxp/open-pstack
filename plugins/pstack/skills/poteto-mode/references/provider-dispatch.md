@@ -73,7 +73,7 @@ pstack-runner \
   [--timeout <seconds>]
 ```
 
-Pass arguments as an argv array or quote every path. Never interpolate prompt text into a shell command. The launcher preflights the assigned CLI and authentication, invokes the model exactly once, disables recursive agents and ambient skill dispatch where the CLI supports it, restricts the built-in tool surface, and records the exact provider/model/effort flags. External lanes do not receive the parent's MCP surface. Keep MCP-dependent Why and Reflect roles on `inherit-parent` or `auto`. The launcher never falls back.
+Pass arguments as an argv array or quote every path. Never interpolate prompt text into a shell command. The launcher preflights the assigned CLI and authentication, invokes the model exactly once, disables recursive agents and ambient skill dispatch where the CLI supports it, restricts the built-in tool surface, and records the exact provider/model/effort flags. External lanes do not receive the parent's MCP surface. A Codex lane starts with `--ignore-user-config` and `--disable apps`, so it also holds none of the MCP servers or app connectors of the Codex login. Keep MCP-dependent Why and Reflect roles on `inherit-parent` or `auto`. The launcher never falls back.
 
 The Cursor CLI exposes no flag that turns off subagents, plugins, or rules, so a Cursor lane keeps whatever its account configures. It does get `--trust` for the assigned workspace and never `--approve-mcps`, so MCP servers stay unapproved. Its preflight is one `cursor-agent models` call, which proves the login and lists the exact model id the lane will request.
 

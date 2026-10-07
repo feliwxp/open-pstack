@@ -2,6 +2,14 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.4.7-cursor.1 starts Codex lanes without the login's MCP tools
+
+A Codex lane inherited every MCP server in `$CODEX_HOME/config.toml` and every app connector of the ChatGPT account. `--disable plugins` removed none of them. On the owner's login a `read-only` lane held 384 MCP tools and completed a call to one of them. MCP servers run outside the Codex sandbox, so the sandbox mode did not bound what such a lane could do.
+
+The runner now starts every Codex lane, in both access modes, with `--ignore-user-config` and `--disable apps`. `--ignore-user-config` skips `config.toml`, which removes the configured MCP servers. Authentication still reads `CODEX_HOME`, so the login is unchanged. `--disable apps` removes the account's app connectors, which do not come from `config.toml`. Measured on Codex CLI 0.160.0, a lane with both flags answers and holds 0 MCP tools.
+
+A lane no longer reads any other key in `config.toml`. The runner already pins the model, effort, sandbox, and working directory in the argv. A setup that relies on `config.toml` for a custom model provider or a profile will no longer reach a lane.
+
 ## 1.4.6-cursor.1 syncs to Cursor pstack 0.15.9
 
 Open Pstack 1.4.6-cursor.1 tracks Cursor pstack 0.15.9 at `e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a`. It ports upstream `23e4138`, `9511e60`, `a586282`, and `e43c7ee`.

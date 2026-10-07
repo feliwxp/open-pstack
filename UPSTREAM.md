@@ -10,9 +10,9 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | Path | `pstack/` |
 | Commit | `e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a` |
 | Upstream version | `0.15.9` |
-| open-pstack version | `1.4.6-cursor.1` |
+| open-pstack version | `1.4.7-cursor.1` |
 
-The table above is the current Cursor sync point. Open Pstack 1.4.6-cursor.1 imports the 0.15.6 through 0.15.9 changes. It retains the provider runner and dropout rules from the prior fork releases. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.4.6-cursor.1 imports the 0.15.6 through 0.15.9 changes. It retains the provider runner and dropout rules from the prior fork releases. Open Pstack 1.4.7-cursor.1 adds a runner fix on the same sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
