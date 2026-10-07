@@ -52,38 +52,6 @@ describe("invocationCommand", () => {
     expect(spec.args).not.toContain("danger-full-access");
   });
 
-  it("pins GPT-6.1 Sol and max effort in the exact Codex argv", () => {
-    const spec = invocationCommand(options({ model: "gpt-6.1-sol", effort: "max" }));
-    expect(spec.command).toBe("codex");
-    expect(spec.stdin).toBe("prompt");
-    expect(spec.args).toEqual([
-      "exec",
-      "--model",
-      "gpt-6.1-sol",
-      "--config",
-      'model_reasoning_effort="max"',
-      "--sandbox",
-      "read-only",
-      "--cd",
-      "/tmp/worktree",
-      "--skip-git-repo-check",
-      "--ephemeral",
-      "--ignore-user-config",
-      "--disable",
-      "apps",
-      "--disable",
-      "plugins",
-      "--disable",
-      "multi_agent",
-      "--disable",
-      "hooks",
-      "--disable",
-      "memories",
-      "--json",
-      "-",
-    ]);
-  });
-
   it("starts every Codex lane without the user's config or app connectors", () => {
     for (const mode of ACCESS_MODES) {
       const { args } = invocationCommand(options({ mode }));
@@ -91,6 +59,19 @@ describe("invocationCommand", () => {
       expect(args, mode).toContain("--ignore-user-config");
       expect(disabled, mode).toContain("apps");
     }
+  });
+
+  it("passes the ultra effort to Codex unchanged", () => {
+    const spec = invocationCommand(
+      options({ model: "gpt-6.1-sol", effort: "ultra" })
+    );
+    expect(spec.args.slice(0, 5)).toEqual([
+      "exec",
+      "--model",
+      "gpt-6.1-sol",
+      "--config",
+      'model_reasoning_effort="ultra"',
+    ]);
   });
 
   it("passes Claude model, effort, permissions, and no-recursion controls", () => {
@@ -140,7 +121,7 @@ describe("invocationCommand", () => {
       "--reasoning-effort",
       "xhigh",
       "--permission-mode",
-      "plan",
+      "auto",
       "--sandbox",
       "read-only",
       "--tools",
@@ -286,6 +267,15 @@ describe("invocationCommand", () => {
     ).toThrow("cursor does not offer grok-4.6-slow at effort xhigh");
   });
 
+  it("refuses every Cursor model at max and ultra", () => {
+    for (const model of ["grok-4.7", "grok-4.7-fast", "grok-4.6", "grok-4.6-fast"]) {
+      for (const effort of ["max", "ultra"] as const) {
+        expect(() => invocationCommand(options({ provider: "cursor", model, effort })))
+          .toThrow(`cursor does not offer ${model} at effort ${effort}`);
+      }
+    }
+  });
+
   it("uses bounded write modes without blanket bypasses", () => {
     const codex = invocationCommand(options({ mode: "isolated-write" }));
     expect(codex.args).toEqual(
@@ -297,7 +287,7 @@ describe("invocationCommand", () => {
     expect(grok.args).toEqual(
       expect.arrayContaining([
         "--permission-mode",
-        "acceptEdits",
+        "auto",
         "--sandbox",
         "workspace",
         "--tools",

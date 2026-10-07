@@ -10,10 +10,11 @@ const directories: string[] = [];
 
 const FORBIDDEN_FENCE = [
   "/goal",
+  "/loop",
   "control-ui",
   "control-cli",
   "git show origin/main:",
-  "grok-4.7-xhigh-fast",
+  "grok-4.6-fast-xhigh",
   "~/.claude",
   "../references/",
   "/tmp",
@@ -137,7 +138,7 @@ describe("check-plan", () => {
     for (const item of FORBIDDEN_FENCE) {
       expect(skeleton.includes(item), item).toBe(false);
     }
-    expect(skeleton).toContain("/loop 1h");
+    expect(skeleton).toContain("30-minute");
     expect(skeleton).toContain(CONTRACT.laneSentence);
   });
 
@@ -343,7 +344,7 @@ describe("check-plan", () => {
       replaceOnce(
         skeleton,
         CONTRACT.laneSentence,
-        "Ten lanes on `grok-4.7-xhigh-fast` at the PR head",
+        "Ten lanes on `grok-4.6-fast-xhigh` at the PR head",
       ),
       `Verify, live lacks "${CONTRACT.laneSentence}"`,
     ],

@@ -6,17 +6,8 @@ export interface CursorModel {
   readonly displayNames: readonly [string, ...string[]];
 }
 
-// Cursor bakes reasoning effort and the fast tier into the model id and reports
-// the served model only as a display name, so one table owns both spellings of
-// every selectable row. The portable model name carries the speed tier: Cursor
-// bills its Fast ids at a higher token rate, and a background lane gains
-// nothing from that priority. Cursor offers no Grok row above xhigh. Grok 4.7
-// ids drop the `cursor-` prefix that Grok 4.6 ids carry. A Grok 4.7 row has two
-// names, and Cursor's stream reports either: the "256K" form seen on 2026-09-23,
-// and the `cursor-agent models` listing form with that slot blank, seen by lanes
-// from 2026-09-30. The Fast names are the standard name plus " Fast", as the
-// listing shows; they were not run live because Fast bills at a higher rate, so
-// a wrong guess fails its lane loudly as malformed-output.
+// Cursor reports display names instead of ids. Each row binds both names
+// to one effort and speed tier because the stream may use either spelling.
 const CURSOR_MODELS: Readonly<
   Record<string, Readonly<Partial<Record<Effort, CursorModel>>>>
 > = {

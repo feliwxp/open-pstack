@@ -41,6 +41,11 @@ describe("runner CLI parsing", () => {
     );
   });
 
+  it("accepts the ultra effort", () => {
+    const args = argv().map((value) => (value === "max" ? "ultra" : value));
+    expect(parseArgs(args)?.effort).toBe("ultra");
+  });
+
   it("accepts cursor as a provider but never as a parent", () => {
     const parsed = parseArgs([
       ...argv().slice(0, 2),
