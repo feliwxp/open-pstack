@@ -7,23 +7,20 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
-import { cursorModel } from "./cursor-models.ts";
 import { versionedClaudeAlias } from "./model-aliases.ts";
-import {
-  codexFailureMessage,
-  parseProviderOutput,
-  reportedModelMatches,
-} from "./parse-output.ts";
+import { parseProviderOutput, ProviderResultError, reportedModelMatches } from "./parse-output.ts";
 import type {
+  ParsedOutput,
   Provider,
   ReceiptStatus,
   RunnerOptions,
   RunnerReceipt,
 } from "./types.ts";
-import { UnavailableModelError, UsageError } from "./types.ts";
+import { UsageError } from "./types.ts";
 
 const ERROR_EVIDENCE_LIMIT = 4_000;
 const GROK_PREFLIGHT_RETRY_DELAY_MS = 5_000;
@@ -36,7 +33,6 @@ interface ProcessResult {
   readonly stderr: string;
   readonly timedOut: boolean;
   readonly cancelledBy: CancellationSignal | null;
-  readonly watcherStopped: boolean;
 }
 
 type CancellationSignal = "SIGINT" | "SIGTERM";
@@ -58,6 +54,11 @@ function evidence(value: string): string {
   return value.trim().slice(0, ERROR_EVIDENCE_LIMIT);
 }
 
+// A provider's terminal event ends its stream, so malformed output keeps the tail.
+function trailingEvidence(value: string): string {
+  return value.trim().slice(-ERROR_EVIDENCE_LIMIT);
+}
+
 function removeIfExists(path: string): void {
   if (existsSync(path)) unlinkSync(path);
 }
@@ -68,15 +69,36 @@ function reserve(path: string): void {
   closeSync(descriptor);
 }
 
-function reserveOutputs(options: RunnerOptions): void {
-  if (options.outputPath === options.receiptPath) {
-    throw new UsageError("output and receipt paths must differ");
+interface ModelStreams {
+  readonly stdout: number;
+  readonly stderr: number;
+}
+
+function modelStreamPaths(receiptPath: string): { stdoutPath: string; stderrPath: string } {
+  return { stdoutPath: `${receiptPath}.stdout`, stderrPath: `${receiptPath}.stderr` };
+}
+
+function reserveOutputs(options: RunnerOptions): ModelStreams {
+  const { stdoutPath, stderrPath } = modelStreamPaths(options.receiptPath);
+  const paths = [options.outputPath, options.receiptPath, stdoutPath, stderrPath];
+  const resolved = paths.map((path) => resolve(path));
+  if (new Set(resolved).size !== paths.length || resolved.includes(resolve(options.promptPath))) {
+    throw new UsageError("prompt, output, receipt, and stream paths must be distinct");
   }
-  reserve(options.outputPath);
+  const created: string[] = [];
+  let stdout: number | null = null;
   try {
-    reserve(options.receiptPath);
+    for (const path of paths.slice(0, 2)) {
+      reserve(path);
+      created.push(path);
+    }
+    stdout = openSync(stdoutPath, "wx", 0o600);
+    created.push(stdoutPath);
+    const stderr = openSync(stderrPath, "wx", 0o600);
+    return { stdout, stderr };
   } catch (error) {
-    removeIfExists(options.outputPath);
+    if (stdout !== null) closeSync(stdout);
+    for (const path of created) removeIfExists(path);
     throw error;
   }
 }
@@ -179,48 +201,29 @@ interface StreamCapture {
   cancel(): Promise<void>;
 }
 
-type StdoutLineWatcher = (line: string) => boolean;
-
-function captureStream(
-  stream: ReadableStream<Uint8Array>,
-  onLine?: (line: string) => void
-): StreamCapture {
+function captureStream(stream: ReadableStream<Uint8Array>, descriptor?: number): StreamCapture {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let text = "";
-  let partialLine = "";
   let cancellationRequested = false;
-
-  const append = (chunk: string): void => {
-    text += chunk;
-    if (onLine === undefined) return;
-    partialLine += chunk;
-    let newline: number;
-    while ((newline = partialLine.indexOf("\n")) >= 0) {
-      const line = partialLine.slice(0, newline);
-      partialLine = partialLine.slice(newline + 1);
-      onLine(line);
-    }
-  };
-  const flush = (): void => {
-    append(decoder.decode());
-    if (partialLine.length > 0) {
-      onLine?.(partialLine);
-      partialLine = "";
-    }
-  };
 
   const result = (async (): Promise<string> => {
     try {
       while (true) {
         const next = await reader.read();
         if (next.done) break;
-        append(decoder.decode(next.value, { stream: true }));
+        if (descriptor !== undefined) {
+          let offset = 0;
+          while (offset < next.value.byteLength) {
+            offset += writeSync(descriptor, next.value, offset, next.value.byteLength - offset);
+          }
+        }
+        text += decoder.decode(next.value, { stream: true });
       }
-      flush();
+      text += decoder.decode();
       return text;
     } catch (error) {
-      flush();
+      text += decoder.decode();
       if (!cancellationRequested) throw error;
       return text;
     } finally {
@@ -244,8 +247,7 @@ function captureStream(
 type ProcessEvent =
   | { readonly kind: "exited"; readonly exitCode: number }
   | { readonly kind: "cancelled"; readonly signal: CancellationSignal }
-  | { readonly kind: "timed-out" }
-  | { readonly kind: "watcher-stopped" };
+  | { readonly kind: "timed-out" };
 
 async function runProcess(
   executable: string,
@@ -255,7 +257,7 @@ async function runProcess(
   prompt: string,
   deadlineAt: number | null,
   cancellation: RunCancellation,
-  stdoutLineWatcher?: StdoutLineWatcher
+  streamFiles?: ModelStreams
 ): Promise<ProcessResult> {
   const child = Bun.spawn([executable, ...spec.args], {
     cwd,
@@ -265,20 +267,8 @@ async function runProcess(
     stderr: "pipe",
   });
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
-  let onStdoutLine: ((line: string) => void) | undefined;
-  const watched: Promise<ProcessEvent> | null = stdoutLineWatcher === undefined
-    ? null
-    : new Promise((resolve) => {
-      let stopped = false;
-      onStdoutLine = (line) => {
-        if (!stopped && stdoutLineWatcher(line)) {
-          stopped = true;
-          resolve({ kind: "watcher-stopped" });
-        }
-      };
-    });
-  const stdoutCapture = captureStream(child.stdout, onStdoutLine);
-  const stderrCapture = captureStream(child.stderr);
+  const stdoutCapture = captureStream(child.stdout, streamFiles?.stdout);
+  const stderrCapture = captureStream(child.stderr, streamFiles?.stderr);
   const streams = Promise.all([stdoutCapture.result, stderrCapture.result]);
   const exited = child.exited.then((exitCode): ProcessEvent => ({
     kind: "exited",
@@ -309,9 +299,8 @@ async function runProcess(
       stdin.end();
     }
 
-    const completions = [exited, cancelled];
+    const completions = [exited, cancelled, streams.then(() => exited)];
     if (deadline !== null) completions.push(deadline);
-    if (watched !== null) completions.push(watched);
     const first = await Promise.race(completions);
 
     let outcome = first;
@@ -327,7 +316,6 @@ async function runProcess(
         cancelled,
       ];
       if (deadline !== null) drains.push(deadline);
-      if (watched !== null) drains.push(watched);
       const drain = await Promise.race(drains);
       if (drain.kind === "drained") {
         captured = drain.captured;
@@ -341,10 +329,9 @@ async function runProcess(
 
     const cancelledBy = cancellation.signal;
     const timedOut = cancelledBy === null && outcome.kind === "timed-out";
-    const watcherStopped = cancelledBy === null && outcome.kind === "watcher-stopped";
     if (cancelledBy !== null) {
       if (await terminate(child, cancelledBy)) signalSent = cancelledBy;
-    } else if (timedOut || watcherStopped) {
+    } else if (timedOut) {
       if (await terminate(child)) signalSent = "SIGTERM";
     }
     if (captured === null) {
@@ -359,7 +346,6 @@ async function runProcess(
       stderr: captured[1],
       timedOut,
       cancelledBy,
-      watcherStopped,
     };
   } catch (error) {
     await terminate(child, cancellation.signal ?? "SIGTERM");
@@ -399,18 +385,9 @@ async function waitForGrokPreflightRetry(
   }
 }
 
-// Cursor lists one model per line as "<id> - <Display Name>", and every
-// standard id is a prefix of its fast twin, so a Cursor id counts as listed
-// only when it is a whole listed token.
-function preflightListsModel(
-  provider: Provider,
-  model: string,
-  listing: string
-): boolean {
-  if (provider !== "cursor") return listing.includes(model);
-  return listing
-    .split("\n")
-    .some((line) => line.trim().split(/\s+/)[0] === model);
+function grokModelAvailable(value: string, model: string): boolean {
+  const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`).test(value);
 }
 
 function preflightPassed(provider: Provider, model: string, result: ProcessResult): boolean {
@@ -432,63 +409,26 @@ function preflightPassed(provider: Provider, model: string, result: ProcessResul
     case "codex":
       return /logged in/i.test(combined);
     case "grok":
-      return (
-        /logged in/i.test(combined) &&
-        preflightListsModel(provider, model, combined)
-      );
-    case "cursor":
-      return preflightListsModel(provider, model, combined);
+      return unavailableStatus(combined) === "child-failed"
+        && /\blogged in\b|\bYou are using XAI_API_KEY\./i.test(combined)
+        && grokModelAvailable(combined, model);
   }
 }
 
-function listsRequestedModel(provider: Provider): boolean {
-  return provider === "grok" || provider === "cursor";
-}
-
 function successfulPreflightEvidence(provider: Provider, model: string): string {
-  return listsRequestedModel(provider)
+  return provider === "grok"
     ? `authenticated; model ${model} available`
     : "authenticated";
 }
 
-const UNAVAILABLE_PATTERNS: readonly (readonly [ReceiptStatus, RegExp])[] = [
-  ["unauthenticated", /not logged in|unauthenticated|authentication|sign in|login required|401 Unauthorized/i],
-  ["usage-limited", /hit your usage limit|usage limit reached|usage_limit_reached|out of credits|quota exceeded|insufficient_quota|spend cap|upgrade to Plus/i],
-  ["rate-limited", /\b429\b|too many requests|rate[ _]limit/i],
-  ["unavailable-model", /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model|unsupported value:.{0,40}not supported with.{0,40}model/i],
-  ["unavailable-network", /waiting for network|error sending request|connection refused|connection reset|dns error|failed to lookup address|network is unreachable/i],
-];
-
 function unavailableStatus(value: string): ReceiptStatus {
-  for (const [status, pattern] of UNAVAILABLE_PATTERNS) {
-    if (pattern.test(value)) return status;
+  if (/not logged in|not authenticated|unauthenticated|authentication|sign in|login required/i.test(value)) {
+    return "unauthenticated";
+  }
+  if (/model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)) {
+    return "unavailable-model";
   }
   return "child-failed";
-}
-
-function codexNetworkWaitWatcher(): StdoutLineWatcher {
-  let hasProgress = false;
-  return (line) => {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(line);
-    } catch {
-      return false;
-    }
-    if (raw === null || typeof raw !== "object") return false;
-    const event = raw as Record<string, unknown>;
-    const item = event.item;
-    if (
-      event.type === "turn.completed" ||
-      ((event.type === "item.started" || event.type === "item.completed") &&
-        item !== null && typeof item === "object" &&
-        "type" in item && typeof item.type === "string" && item.type !== "error")
-    ) {
-      hasProgress = true;
-    }
-    return !hasProgress && event.type === "error" &&
-      typeof event.message === "string" && /waiting for network/i.test(event.message);
-  };
 }
 
 function preflightFailureStatus(
@@ -498,8 +438,7 @@ function preflightFailureStatus(
 ): ReceiptStatus {
   const status = unavailableStatus(value);
   if (status !== "child-failed") return status;
-  return listsRequestedModel(provider) &&
-      !preflightListsModel(provider, model, value)
+  return provider === "grok" && !grokModelAvailable(value, model)
     ? "unavailable-model"
     : "unauthenticated";
 }
@@ -526,32 +465,27 @@ function statusExitCode(status: ReceiptStatus): number {
     case "malformed-output":
       return 65;
     case "unavailable-cli":
-    case "usage-limited":
     case "unavailable-model":
       return 69;
-    case "unavailable-network":
-      return 68;
     case "child-failed":
       return 70;
     case "unauthenticated":
       return 77;
-    case "rate-limited":
-      return 75;
     case "timed-out":
       return 124;
   }
 }
 
 function modelProof(
-  options: RunnerOptions,
+  provider: Provider,
+  requested: string,
   reported: string | null
 ): {
   readonly reportedModel: string | null;
   readonly modelVerified: boolean;
   readonly modelEvidence: "provider-report" | "pinned-argv" | null;
 } {
-  const { provider, model: requested, effort } = options;
-  if (reportedModelMatches(provider, requested, reported, effort)) {
+  if (reportedModelMatches(provider, requested, reported)) {
     return {
       reportedModel: reported,
       modelVerified: true,
@@ -574,7 +508,7 @@ function modelProof(
 
 function completeReceipt(
   options: RunnerOptions,
-  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "cwd" | "promptPath" | "outputPath">
+  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
 ): RunnerReceipt {
   return {
     schemaVersion: 1,
@@ -586,6 +520,7 @@ function completeReceipt(
     cwd: options.cwd,
     promptPath: options.promptPath,
     outputPath: options.outputPath,
+    ...modelStreamPaths(options.receiptPath),
     ...partial,
   };
 }
@@ -638,15 +573,13 @@ async function executeLane(
   deadlineAt: number | null,
   invocation: CommandSpec,
   preflight: CommandSpec,
-  progress: LaneProgress
+  progress: LaneProgress,
+  streamFiles: ModelStreams
 ): Promise<RunResult> {
   const startedAt = new Date(started).toISOString();
-  // Cursor lists and reports its own id, which carries the effort. Every other
-  // provider's preflight lists the portable model the descriptor names.
-  const preflightModel = options.provider === "cursor"
-    ? cursorModel(options.model, options.effort).id
-    : options.model;
   const prompt = readFileSync(options.promptPath, "utf8");
+  const parentNetworkDisabled = options.parent === "codex"
+    && process.env.CODEX_SANDBOX_NETWORK_DISABLED === "1";
   const env = childEnvironment(options.provider);
   const executable = Bun.which(invocation.command, {
     PATH: env.PATH,
@@ -741,9 +674,9 @@ async function executeLane(
     cancellation
   );
   let rawPreflightEvidence = evidence(`${preflightResult.stdout}\n${preflightResult.stderr}`);
-  let passed = preflightPassed(options.provider, preflightModel, preflightResult);
+  let passed = preflightPassed(options.provider, options.model, preflightResult);
   let preflightEvidence = passed
-    ? successfulPreflightEvidence(options.provider, preflightModel)
+    ? successfulPreflightEvidence(options.provider, options.model)
     : rawPreflightEvidence;
 
   if (
@@ -751,7 +684,7 @@ async function executeLane(
     !passed &&
     preflightResult.cancelledBy === null &&
     !preflightResult.timedOut &&
-    preflightFailureStatus(options.provider, preflightModel, rawPreflightEvidence) ===
+    preflightFailureStatus(options.provider, options.model, rawPreflightEvidence) ===
       "unauthenticated"
   ) {
     preflightState = {
@@ -785,11 +718,11 @@ async function executeLane(
       cancellation
     );
     rawPreflightEvidence = evidence(`${preflightResult.stdout}\n${preflightResult.stderr}`);
-    passed = preflightPassed(options.provider, preflightModel, preflightResult);
+    passed = preflightPassed(options.provider, options.model, preflightResult);
     preflightEvidence = retriedPreflightEvidence(
       firstPreflightEvidence,
       passed
-        ? successfulPreflightEvidence(options.provider, preflightModel)
+        ? successfulPreflightEvidence(options.provider, options.model)
         : rawPreflightEvidence,
       passed
     );
@@ -812,7 +745,7 @@ async function executeLane(
     const completed = Date.now();
     const preflightFailure = preflightFailureStatus(
       options.provider,
-      preflightModel,
+      options.model,
       rawPreflightEvidence
     );
     const status: ReceiptStatus = preflightResult.cancelledBy !== null
@@ -865,7 +798,7 @@ async function executeLane(
     prompt,
     deadlineAt,
     cancellation,
-    options.provider === "codex" ? codexNetworkWaitWatcher() : undefined
+    streamFiles
   );
   const completed = Date.now();
   const base = {
@@ -879,27 +812,43 @@ async function executeLane(
     signal: result.signal,
   } as const;
 
-  if (result.cancelledBy !== null || result.timedOut || result.watcherStopped || result.exitCode !== 0) {
+  let parsed: ParsedOutput | null = null;
+  let parseError: unknown = null;
+  if (result.cancelledBy === null && !result.timedOut
+      && (result.exitCode === 0 || (options.provider === "grok" && result.stdout.trim().length > 0))) {
+    try {
+      parsed = parseProviderOutput(options.provider, result.stdout, result.stderr, options.model);
+    } catch (error) {
+      parseError = error;
+    }
+  }
+  const providerFailure = parseError instanceof ProviderResultError ? parseError : null;
+  const metadata = providerFailure?.metadata ?? (result.exitCode === 0 ? parsed : null);
+  if (result.cancelledBy !== null || result.timedOut || providerFailure !== null
+      || result.exitCode !== 0) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
-    const failureEvidence = evidence(rawFailureEvidence);
     const status: ReceiptStatus = result.cancelledBy !== null
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
-        : result.watcherStopped
-          ? "unavailable-network"
-          : unavailableStatus(options.provider === "codex"
-            ? codexFailureMessage(result.stdout) ?? rawFailureEvidence
-            : rawFailureEvidence);
+        : providerFailure?.status ?? unavailableStatus(rawFailureEvidence);
+    const sandboxHint = status === "child-failed" && providerFailure === null && parentNetworkDisabled
+      ? "likely cause: Codex parent sandbox has network disabled; see provider-dispatch.md#host-and-parent-prerequisites"
+      : null;
+    const failureEvidence = evidence(providerFailure !== null
+      ? `${providerFailure.message}\n${rawFailureEvidence}`
+      : sandboxHint !== null
+        ? `${sandboxHint}\n${rawFailureEvidence}`
+        : rawFailureEvidence);
     receipt = completeReceipt(options, {
       ...base,
       status,
-      reportedModel: null,
-      modelVerified: false,
-      modelEvidence: null,
-      sessionId: null,
-      usage: null,
-      costUsd: null,
+      ...(metadata === null
+        ? { reportedModel: null, modelVerified: false, modelEvidence: null }
+        : modelProof(options.provider, options.model, metadata.reportedModel)),
+      sessionId: metadata?.sessionId ?? null,
+      usage: metadata?.usage ?? null,
+      costUsd: metadata?.costUsd ?? null,
       error: {
         message: result.cancelledBy !== null
           ? result.signal === result.cancelledBy
@@ -907,9 +856,7 @@ async function executeLane(
             : `launcher received ${result.cancelledBy} after child exited`
           : result.timedOut
             ? `launcher exceeded the explicit ${options.timeoutMs}ms deadline`
-            : result.watcherStopped
-              ? "Codex was waiting for the network before the model produced output"
-              : `child exited with status ${result.exitCode}`,
+            : providerFailure?.message ?? `child exited with status ${result.exitCode}${sandboxHint === null ? "" : `; ${sandboxHint}`}`,
         evidence: failureEvidence,
       },
     });
@@ -919,14 +866,13 @@ async function executeLane(
   }
 
   try {
-    const parsed = parseProviderOutput(
+    if (parseError !== null) throw parseError;
+    if (parsed === null) throw new Error("provider result was not parsed");
+    const proof = modelProof(
       options.provider,
-      result.stdout,
-      result.stderr,
       options.model,
-      options.effort
+      parsed.reportedModel
     );
-    const proof = modelProof(options, parsed.reportedModel);
     if (!proof.modelVerified && proof.modelEvidence !== "pinned-argv") {
       throw new Error(
         `requested model ${options.model} was not reported by ${options.provider}`
@@ -956,7 +902,7 @@ async function executeLane(
       costUsd: null,
       error: {
         message,
-        evidence: evidence(`${result.stderr}\n${result.stdout}`),
+        evidence: trailingEvidence(`${result.stderr}\n${result.stdout}`),
       },
     });
   }
@@ -971,6 +917,7 @@ export async function runLane(
 ): Promise<RunResult> {
   validateOptions(options);
   const deadlineAt = options.timeoutMs === null ? null : started + options.timeoutMs;
+  const invocation = invocationCommand(options);
   const preflight = preflightCommand(options.provider);
   const progress: LaneProgress = {
     executable: null,
@@ -979,14 +926,13 @@ export async function runLane(
       status: "not-run",
       evidence: "",
     },
-    argv: [],
+    argv: [invocation.command, ...invocation.args],
   };
   const cancellation = installRunCancellation();
+  let streamFiles: ModelStreams | null = null;
   try {
-    reserveOutputs(options);
+    streamFiles = reserveOutputs(options);
     try {
-      const invocation = invocationCommand(options);
-      progress.argv = [invocation.command, ...invocation.args];
       return await executeLane(
         options,
         cancellation,
@@ -994,22 +940,19 @@ export async function runLane(
         deadlineAt,
         invocation,
         preflight,
-        progress
+        progress,
+        streamFiles
       );
     } catch (error) {
       const completed = Date.now();
       const signal = cancellation.signal;
-      const unavailableModel = error instanceof UnavailableModelError;
-      const status: ReceiptStatus = unavailableModel
-        ? "unavailable-model"
-        : signal !== null
-          ? "cancelled"
-          : deadlineAt !== null && completed >= deadlineAt
-            ? "timed-out"
-            : "child-failed";
+      const status: ReceiptStatus = signal !== null
+        ? "cancelled"
+        : deadlineAt !== null && completed >= deadlineAt
+          ? "timed-out"
+          : "child-failed";
       const message = error instanceof Error ? error.message : String(error);
-      const terminalPreflight = progress.preflight.status === "not-run" &&
-          (status === "cancelled" || status === "timed-out")
+      const terminalPreflight = progress.preflight.status === "not-run" && status !== "child-failed"
         ? { ...progress.preflight, status }
         : progress.preflight;
       const receipt = completeReceipt(options, {
@@ -1029,14 +972,12 @@ export async function runLane(
         usage: null,
         costUsd: null,
         error: {
-          message: unavailableModel
-            ? message
-            : status === "cancelled"
-              ? `launcher received ${signal} after reserving output paths`
-              : status === "timed-out"
-                ? "explicit deadline elapsed after reserving output paths"
-                : "launcher failed after reserving output paths",
-          evidence: unavailableModel ? "" : evidence(message),
+          message: status === "cancelled"
+            ? `launcher received ${signal} after reserving output paths`
+            : status === "timed-out"
+              ? "explicit deadline elapsed after reserving output paths"
+              : "launcher failed after reserving output paths",
+          evidence: evidence(message),
         },
       });
       removeIfExists(options.outputPath);
@@ -1045,6 +986,10 @@ export async function runLane(
     }
   } finally {
     cancellation.dispose();
+    if (streamFiles !== null) {
+      closeSync(streamFiles.stdout);
+      closeSync(streamFiles.stderr);
+    }
   }
 }
 

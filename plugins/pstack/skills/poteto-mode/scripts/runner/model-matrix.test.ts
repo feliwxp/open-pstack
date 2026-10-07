@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cursorModel } from "./cursor-models.ts";
 import { EFFORTS, type Effort } from "./types.ts";
 
 const PLUGIN_ROOT = join(import.meta.dir, "../../../..");
@@ -20,14 +19,13 @@ const MATRIX_HEADER = [
   "Default effort",
   "Selectable efforts",
   "Claude-native agent stem",
-  "Setup probe",
 ] as const;
 
-const FAMILY_ORDER = ["opus", "sol", "grok", "fable", "cursor", "sol-6.1"] as const;
-const PROVIDERS = ["claude", "codex", "grok", "cursor"] as const;
-const SETUP_PROBES = ["required", "on request"] as const;
+const FAMILY_ORDER = ["fable", "sol", "grok", "opus"] as const;
+const FIRST_RUN_PANEL = ["opus", "sol", "grok"] as const;
+const PROVIDERS = ["claude", "codex", "grok"] as const;
 const DESCRIPTOR_RE =
-  /(claude|codex|grok|cursor):[a-z0-9.-]+@(low|medium|high|xhigh|max)/g;
+  /(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)/g;
 const PANEL_ROLES = [
   "arena runners",
   "arena cross-judge pool",
@@ -54,8 +52,8 @@ const SHEET_ROLES = [
 const SETUP_SECTION_ORDER = [
   "### 2. Load current state",
   "### 3. Parse per-family efforts",
-  "### 4. Ask for a budget, then one requested effort per family",
-  "### 5. Probe the three requested pairs",
+  "### 4. Collect one requested effort per family",
+  "### 5. Probe the requested pairs",
   "### 6. Render, preserving role families",
   "### 7. Confirm and commit",
 ] as const;
@@ -68,7 +66,6 @@ interface MatrixRow {
   defaultEffort: Effort;
   selectableEfforts: Effort[];
   claudeNativeAgentStem: string | null;
-  setupProbe: (typeof SETUP_PROBES)[number];
 }
 
 function splitRow(line: string): string[] {
@@ -110,9 +107,9 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
     .slice(start + 1, end)
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"));
-  if (table.length !== 2 + FAMILY_ORDER.length) {
+  if (table.length !== 6) {
     throw new Error(
-      `model matrix must be header, separator, and ${FAMILY_ORDER.length} data rows, got ${table.length}`
+      `model matrix must be header, separator, and 4 data rows, got ${table.length}`
     );
   }
   const header = splitRow(table[0]);
@@ -135,13 +132,9 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
       defaultEffortRaw,
       selectableRaw,
       stemRaw,
-      setupProbeRaw,
     ] = cells;
     if (!(PROVIDERS as readonly string[]).includes(provider)) {
       throw new Error(`invalid provider: ${provider}`);
-    }
-    if (!(SETUP_PROBES as readonly string[]).includes(setupProbeRaw)) {
-      throw new Error(`invalid setup probe: ${setupProbeRaw}`);
     }
     const selectableEfforts = selectableRaw.split(/\s+/).map(asEffort);
     const claudeNativeAgentStem = stemRaw === "-" ? null : stemRaw;
@@ -163,15 +156,21 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
       defaultEffort,
       selectableEfforts,
       claudeNativeAgentStem,
-      setupProbe: setupProbeRaw as MatrixRow["setupProbe"],
     };
   });
 }
 
-function defaultDescriptors(rows: MatrixRow[]): string[] {
-  return rows
-    .filter((row) => row.setupProbe === "required")
-    .map((row) => `${row.provider}:${row.model}@${row.defaultEffort}`);
+function defaultDescriptors(
+  rows: MatrixRow[],
+  families: readonly string[]
+): string[] {
+  return families.map((family) => {
+    const row = rows.find((candidate) => candidate.family === family);
+    if (row === undefined) {
+      throw new Error(`missing matrix family: ${family}`);
+    }
+    return `${row.provider}:${row.model}@${row.defaultEffort}`;
+  });
 }
 
 function parseFrontmatter(text: string): {
@@ -209,10 +208,10 @@ function firstRunSheet(setup: string): string {
 describe("model matrix", () => {
   const rows = parseModelMatrix(readFileSync(DISPATCH_PATH, "utf8"));
   const setup = readFileSync(SETUP_PATH, "utf8");
-  const panel = defaultDescriptors(rows);
+  const panel = defaultDescriptors(rows, FIRST_RUN_PANEL);
 
   it("owns the effort universe and first-run defaults", () => {
-    expect([...EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect([...EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
     expect(rows.map((row) => row.family)).toEqual([...FAMILY_ORDER]);
     for (const row of rows) {
       expect(row.upstreamChoice.length).toBeGreaterThan(0);
@@ -225,49 +224,43 @@ describe("model matrix", () => {
     expect(
       rows.map((row) => [row.family, row.defaultEffort])
     ).toEqual([
-      ["opus", "max"],
+      ["fable", "max"],
       ["sol", "max"],
       ["grok", "xhigh"],
-      ["fable", "max"],
-      ["cursor", "xhigh"],
-      ["sol-6.1", "max"],
-    ]);
-    expect(rows.map((row) => row.setupProbe)).toEqual([
-      "required",
-      "required",
-      "required",
-      "on request",
-      "on request",
-      "on request",
-    ]);
-    expect(panel).toEqual([
-      "claude:opus@max",
-      "codex:gpt-5.6-sol@max",
-      "grok:grok-4.7@xhigh",
+      ["opus", "max"],
     ]);
     expect(
       rows
         .filter((row) => row.family === "fable" || row.family === "opus")
         .map((row) => [row.family, row.model])
     ).toEqual([
-      ["opus", "opus"],
       ["fable", "fable"],
+      ["opus", "opus"],
     ]);
-    expect(rows.find((row) => row.family === "sol-6.1")).toEqual({
-      family: "sol-6.1",
-      upstreamChoice: "-",
-      provider: "codex",
-      model: "gpt-6.1-sol",
-      defaultEffort: "max",
-      selectableEfforts: [...EFFORTS],
-      claudeNativeAgentStem: null,
-      setupProbe: "on request",
-    });
-    expect(resolveEntry("codex:gpt-6.1-sol@max", rows)).toBe("sol-6.1");
-    expect(() => resolveEntry("codex:gpt-6.1-sol@ultra", rows)).toThrow(
-      "not an effort: ultra"
+  });
+
+  it("offers ultra only on the Sol row, whose Codex model lists it", () => {
+    expect(
+      rows
+        .filter((row) => row.selectableEfforts.includes("ultra"))
+        .map((row) => `${row.provider}:${row.model}`)
+    ).toEqual(["codex:gpt-6.1-sol"]);
+  });
+
+  it("keeps the previous Sol default running until setup replaces it", () => {
+    const dispatch = readFileSync(DISPATCH_PATH, "utf8");
+    expect(dispatch).toContain(
+      "`codex:gpt-5.6-sol@<effort>` is the previous Sol default."
     );
-    expect("codex:gpt-6.1-sol@ultra".match(DESCRIPTOR_RE)).toBeNull();
+    expect(dispatch).toContain("Do not rewrite it in memory.");
+    expect(setup).toContain(
+      "propose replacing every occurrence with `codex:gpt-6.1-sol@<same effort>` and ask"
+    );
+    expect(setup).toContain(
+      "Reject `ultra` for every row whose Selectable efforts cell does not list it."
+    );
+    expect(setup).toContain("matching a kept `codex:gpt-5.6-sol` to the Sol row");
+    expect(setup).toContain("other than a kept `gpt-5.6-sol`");
   });
 
   it("ships exactly the declared Claude-native frontier agents", () => {
@@ -314,46 +307,11 @@ describe("model matrix", () => {
     expect(shipped).toEqual([...expected].sort());
   });
 
-  it("binds the Cursor matrix row to the shipped model registry", () => {
-    const cursor = rows.find((row) => row.family === "cursor");
-    if (cursor === undefined) {
-      throw new Error("missing cursor matrix row");
-    }
-    expect(cursor.provider).toBe("cursor");
-    expect(cursor.setupProbe).toBe("on request");
-    // The row's Model cell is the default speed tier. The fast tier is a
-    // second model name under the same family, not a hidden part of the id.
-    expect(cursor.model).not.toContain("fast");
-    const fastModel = `${cursor.model}-fast`;
-    for (const effort of EFFORTS) {
-      if (cursor.selectableEfforts.includes(effort)) {
-        expect(cursorModel(cursor.model, effort).id).toBe(
-          `${cursor.model}-${effort}`
-        );
-        expect(cursorModel(fastModel, effort).id).toBe(
-          `${cursor.model}-${effort}-fast`
-        );
-      } else {
-        expect(() => cursorModel(cursor.model, effort)).toThrow(
-          `cursor does not offer ${cursor.model} at effort ${effort}`
-        );
-        expect(() => cursorModel(fastModel, effort)).toThrow(
-          `cursor does not offer ${fastModel} at effort ${effort}`
-        );
-      }
-    }
-    const dispatch = readFileSync(DISPATCH_PATH, "utf8");
-    expect(dispatch).toContain(`\`cursor:${cursor.model}@<effort>\``);
-    expect(dispatch).toContain(`\`cursor:${fastModel}@<effort>\``);
-    expect(dispatch).toContain(`\`cursor:${fastModel}@${cursor.defaultEffort}\``);
-  });
-
   it("keeps setup's first-run default panel copy aligned with the matrix", () => {
     const sheet = firstRunSheet(setup);
-    expect(sheet).toContain("\nbudget: unlimited (max)\n");
     const roles = sheet
       .split("\n")
-      .filter((line) => line.includes(": ") && !line.startsWith("budget: "))
+      .filter((line) => line.includes(": "))
       .map((line) => line.slice(0, line.indexOf(": ")));
     expect(roles).toEqual([...SHEET_ROLES]);
     const byFamily = new Map<string, MatrixRow>(
@@ -392,21 +350,6 @@ describe("model matrix", () => {
     expect(setup).toContain("Do not probe or write while any inconsistency is unresolved.");
     expect(setup).toContain("A failed probe writes nothing:");
     expect(setup).toContain("Run one probe per family");
-    expect(setup).toContain("Ask exactly three effort questions");
-    for (const label of [
-      "`unlimited — keep max`",
-      "`large — xhigh reasoning`",
-      "`medium — high reasoning`",
-      "`small — medium reasoning`",
-    ]) {
-      expect(setup).toContain(label);
-    }
-    expect(setup).toContain(
-      "Ask its effort question only when the loaded sheet or the operator's request names that family."
-    );
-    expect(setup).toContain(
-      "whose Setup probe cell reads `required`"
-    );
     expect(setup).toContain("normalized complete role map from step 2");
     expect(setup).toContain("starts with `claude-fable-` or `claude-opus-`");
     expect(setup).toContain("preserving the provider, effort, role, and lane order");
@@ -442,153 +385,5 @@ describe("model matrix", () => {
     expect(normalization).toContain("without writing user files");
     expect(normalization).toContain("`/setup-pstack` will rewrite it");
     expect(normalization).toContain("runner rejects a missed Fable or Opus version pin");
-  });
-});
-
-// The owner's Stack 7 sheet (2026-09-23): combined Why and Reflect lines and
-// Cursor-routed Grok. Upstream 0.15.5 names those lines separately and falls
-// back by `claude-`/`gpt-`/`grok-` prefix, which would demote every cursor entry.
-const OWNER_SHEET = `feature, refactoring: cursor:grok-4.7@xhigh
-bug-fix: cursor:grok-4.7@xhigh
-perf-issue: cursor:grok-4.7@xhigh
-hillclimb: cursor:grok-4.7@xhigh
-judgment and prose: claude:opus@max
-hardest tasks: claude:opus@max
-how explorer: cursor:grok-4.7@xhigh
-how explainer: claude:opus@max
-why investigators, synthesizer: inherit-parent
-reflect tooling, judgment, divergent, synthesizer: inherit-parent
-arena runners: claude:opus@max, cursor:grok-4.7@xhigh
-arena cross-judge pool: cursor:grok-4.7@xhigh, claude:opus@max
-swarm workers: cursor:grok-4.7@xhigh
-architect runners: claude:opus@max, cursor:grok-4.7@xhigh
-interrogate reviewers: claude:opus@max, cursor:grok-4.7@xhigh
-`;
-
-const ROUTED_SKILL_LINES: Record<string, string[]> = {
-  how: ["how explorer", "how explainer"],
-  why: ["why investigators, synthesizer"],
-  reflect: ["reflect tooling, judgment, divergent, synthesizer"],
-  arena: ["arena runners", "arena cross-judge pool"],
-  architect: ["architect runners", "arena runners"],
-  interrogate: ["interrogate reviewers"],
-  swarm: ["swarm workers"],
-};
-
-const ALIASES = ["inherit-parent", "auto"] as const;
-
-function parseSheet(text: string): Map<string, string[]> {
-  const roles = new Map<string, string[]>();
-  for (const line of text.split("\n")) {
-    const idx = line.indexOf(": ");
-    if (idx < 0 || line.startsWith("budget: ")) {
-      continue;
-    }
-    const role = line.slice(0, idx);
-    if (roles.has(role)) {
-      throw new Error(`duplicate sheet role: ${role}`);
-    }
-    roles.set(role, line.slice(idx + 2).split(", "));
-  }
-  return roles;
-}
-
-function resolveEntry(entry: string, rows: MatrixRow[]): string {
-  if ((ALIASES as readonly string[]).includes(entry)) {
-    return entry;
-  }
-  const match = entry.match(/^([a-z]+):([a-z0-9.-]+)@([a-z]+)$/);
-  if (match === null) {
-    throw new Error(`not a provider:model@effort descriptor: ${entry}`);
-  }
-  const [, provider, model, effort] = match;
-  const row = rows.find(
-    (candidate) =>
-      candidate.provider === provider &&
-      (candidate.model === model ||
-        (provider === "cursor" && model === `${candidate.model}-fast`))
-  );
-  if (row === undefined) {
-    throw new Error(`no matrix family for ${entry}`);
-  }
-  if (!row.selectableEfforts.includes(asEffort(effort))) {
-    throw new Error(`${entry}: ${effort} is not selectable for ${row.family}`);
-  }
-  return row.family;
-}
-
-function citedLines(text: string): string[] {
-  const cited = new Set<string>();
-  for (const m of text.matchAll(/the `([^`]+)` line/g)) {
-    cited.add(m[1]);
-  }
-  for (const m of text.matchAll(/^\| \w+ \| `([^`]+)` \|/gm)) {
-    cited.add(m[1]);
-  }
-  return [...cited].sort();
-}
-
-describe("routed skills read the owner's model sheet", () => {
-  const rows = parseModelMatrix(readFileSync(DISPATCH_PATH, "utf8"));
-  const setup = readFileSync(SETUP_PATH, "utf8");
-  const owner = parseSheet(OWNER_SHEET);
-  const skill = (name: string) =>
-    readFileSync(join(PLUGIN_ROOT, "skills", name, "SKILL.md"), "utf8");
-
-  it("keeps every owner line in setup's role map, so setup neither drops nor rejects one", () => {
-    expect([...owner.keys()]).toEqual([...parseSheet(firstRunSheet(setup)).keys()]);
-    const retired = [...setup.matchAll(/`([^`]+)` is the one retired role/g)].map(
-      (m) => m[1]
-    );
-    expect(retired).toEqual(["how critics"]);
-    for (const role of retired) {
-      expect(owner.has(role)).toBe(false);
-    }
-  });
-
-  it("resolves every owner entry, cursor included, to its matrix family", () => {
-    const families = new Map<string, string[]>();
-    for (const [role, entries] of owner) {
-      families.set(role, entries.map((entry) => resolveEntry(entry, rows)));
-    }
-    expect(families.get("swarm workers")).toEqual(["cursor"]);
-    expect(families.get("arena runners")).toEqual(["opus", "cursor"]);
-    expect(families.get("why investigators, synthesizer")).toEqual(["inherit-parent"]);
-  });
-
-  it("names only lines the owner's sheet carries, so no combined line reaches a default", () => {
-    for (const [name, expected] of Object.entries(ROUTED_SKILL_LINES)) {
-      const cited = citedLines(skill(name));
-      expect({ name, cited }).toEqual({ name, cited: [...expected].sort() });
-      for (const line of cited) {
-        expect({ name, line, present: owner.has(line) }).toEqual({
-          name,
-          line,
-          present: true,
-        });
-      }
-    }
-    const poteto = skill("poteto-mode");
-    for (const role of [
-      "feature, refactoring",
-      "bug-fix",
-      "perf-issue",
-      "hillclimb",
-      "hardest tasks",
-      "judgment and prose",
-    ]) {
-      expect(poteto).toContain(`\`${role}\``);
-      expect(owner.has(role)).toBe(true);
-    }
-  });
-
-  it("never moves a configured entry to a default by its model-name prefix", () => {
-    for (const name of readdirSync(join(PLUGIN_ROOT, "skills"))) {
-      const text = skill(name);
-      expect({ name, prefixFallback: /Families go by prefix|its family's default|table default of its family/.test(text) }).toEqual({
-        name,
-        prefixFallback: false,
-      });
-    }
   });
 });

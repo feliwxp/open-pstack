@@ -80,11 +80,11 @@ In Codex, ask:
 Use pstack:setup-pstack to configure pstack.
 ```
 
-Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. Setup first asks for a reasoning budget: unlimited, large, medium, or small. The current default group uses Opus, GPT-5.6 Sol, and Grok 4.7.
-
-A model sheet written before 0.15.3 pins the old default models. Delete those role lines, or delete the sheet, then run setup again. A rerun keeps any role whose model differs from the default. Setup stops on a `grok:grok-4.6` line and offers `grok:grok-4.7` in its place.
+Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. The default review panel uses Opus, GPT-5.6 Sol, and Grok 4.7, and setup probes only the models your roles use. Fable remains available.
 
 An older model sheet starts using the rolling aliases in memory as soon as this release is installed. Run setup once after updating to persist that migration. It replaces versioned Fable and Opus entries while preserving every role assignment and effort selection.
+
+A model sheet from an earlier release keeps its panel. To take the new defaults, delete those role lines and run setup again; setup fills missing roles from the defaults. A `grok:grok-4.6` entry keeps running until the next setup run asks you to replace it.
 
 ### 2. Use poteto-mode
 
@@ -119,10 +119,6 @@ That is the main workflow. The other skills are there when poteto-mode needs the
 | `maintain-verification-skill` | The project's verification instructions no longer match the product. |
 | `babysit` | A pull request needs CI failures and review comments handled until it is ready. |
 | `reflect` | A hard task is finished and its lessons should improve the next run. |
-| `correct` | Agents repeat mistakes that the repo can prevent. |
-| `benchmark-checklist` | A measured speedup or regression needs evidence before you report it. |
-
-The 24 principle skills use `user-invocable: false`. Poteto-mode reads their index and applies them by name. [Explain the Number](plugins/pstack/skills/principle-explain-the-number/SKILL.md) is the new verification principle.
 
 Plugin skills include `pstack:` in their name. In Claude Code, invoke a native skill such as `/pstack:architect`. In Codex, ask for the skill, such as `Use pstack:architect for this design.` See the [technical reference](docs/reference.md) for the full list.
 
@@ -130,7 +126,7 @@ Plugin skills include `pstack:` in their name. In Claude Code, invoke a native s
 
 Some pstack workflows use one model. Skills such as `architect`, `arena`, and `interrogate` can run several models in parallel. Each model run uses the subscription and token allowance of its own command-line tool.
 
-`setup-pstack` lets you choose the models, one requested effort per model family, and how many run in parallel. A model from the app you are using runs inside that app. Other models run through their own command-line tools. Open Pstack does not quietly replace a failed model with a weaker one.
+`setup-pstack` lets you choose the models, one requested effort per model family you assign, and how many run in parallel. A model from the app you are using runs inside that app. Other models run through their own command-line tools. Open Pstack does not quietly replace a failed model with a weaker one.
 
 ## Claude Code and Codex
 
@@ -159,7 +155,7 @@ This repository also keeps:
 
 ## Staying close to Lauren's pstack
 
-Open Pstack 1.4.7-cursor.1 tracks pstack 0.15.9 at Cursor commit [`e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a`](https://github.com/cursor/plugins/commit/e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a).
+Open Pstack 1.5.0 tracks pstack 0.15.5 at Cursor commit [`12d587dfb20741cafc376c42c696c5f6e2a64487`](https://github.com/cursor/plugins/commit/12d587dfb20741cafc376c42c696c5f6e2a64487).
 
 The two projects have separate version numbers. The pstack version identifies Lauren's upstream content. The Open Pstack version identifies the Claude Code and Codex package built from it.
 

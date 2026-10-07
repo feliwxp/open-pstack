@@ -1,14 +1,23 @@
 import type {
-  Effort,
   NormalizedUsage,
   ParsedOutput,
   Provider,
 } from "./types.ts";
-import { cursorModel, reportsCursorModel } from "./cursor-models.ts";
 import {
   concreteModelMatchesRollingAlias,
   isRollingClaudeAlias,
 } from "./model-aliases.ts";
+
+export class ProviderResultError extends Error {
+  constructor(
+    message: string,
+    readonly status: "cancelled" | "child-failed",
+    readonly metadata: Omit<ParsedOutput, "text">
+  ) {
+    super(message);
+    this.name = "ProviderResultError";
+  }
+}
 
 type JsonObject = Record<string, unknown>;
 
@@ -30,18 +39,14 @@ function normalizedUsage(value: unknown): NormalizedUsage | null {
   const usage = object(value);
   if (usage === null) return null;
   const result: NormalizedUsage = {
-    inputTokens: finiteNumber(usage.input_tokens ?? usage.inputTokens),
+    inputTokens: finiteNumber(usage.input_tokens),
     cachedInputTokens: finiteNumber(
-      usage.cached_input_tokens
-        ?? usage.cache_read_input_tokens
-        ?? usage.cacheReadTokens
+      usage.cached_input_tokens ?? usage.cache_read_input_tokens
     ),
     cacheCreationInputTokens: finiteNumber(
-      usage.cache_creation_input_tokens
-        ?? usage.cache_write_input_tokens
-        ?? usage.cacheWriteTokens
+      usage.cache_creation_input_tokens ?? usage.cache_write_input_tokens
     ),
-    outputTokens: finiteNumber(usage.output_tokens ?? usage.outputTokens),
+    outputTokens: finiteNumber(usage.output_tokens),
     reasoningTokens: finiteNumber(
       usage.reasoning_tokens ?? usage.reasoning_output_tokens
     ),
@@ -55,56 +60,51 @@ function normalizedUsage(value: unknown): NormalizedUsage | null {
 function modelFromUsage(
   value: unknown,
   provider: Provider,
-  requestedModel: string,
-  effort: Effort
+  requestedModel: string
 ): string | null {
   const usage = object(value);
   if (usage === null) return null;
   const models = Object.keys(usage);
   return models.find((model) =>
-    reportedModelMatches(provider, requestedModel, model, effort)
+    reportedModelMatches(provider, requestedModel, model)
   )
     ?? models[0]
     ?? null;
 }
 
-function parseClaude(
-  stdout: string,
-  requestedModel: string,
-  effort: Effort
-): ParsedOutput {
+function parseClaude(stdout: string, requestedModel: string): ParsedOutput {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout);
   } catch {
     throw new Error("claude did not emit valid JSON");
   }
-  const value = object(raw);
-  if (value === null) throw new Error("claude emitted a non-object result");
+  let value: JsonObject | null = null;
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      const event = object(entry);
+      if (event?.type === "result") value = event;
+    }
+    if (value === null) throw new Error("claude result did not contain a terminal event");
+  } else {
+    value = object(raw);
+    if (value === null) throw new Error("claude emitted a non-object result");
+  }
 
+  if (value.is_error === true) throw new Error("claude reported an error result");
   const text = nullableString(value.result);
   if (text === null) throw new Error("claude result did not contain final text");
-  if (value.is_error === true) throw new Error("claude reported an error result");
 
   return {
     text,
-    reportedModel: modelFromUsage(
-      value.modelUsage,
-      "claude",
-      requestedModel,
-      effort
-    ),
+    reportedModel: modelFromUsage(value.modelUsage, "claude", requestedModel),
     sessionId: nullableString(value.session_id ?? value.sessionId),
     usage: normalizedUsage(value.usage),
     costUsd: finiteNumber(value.total_cost_usd) ?? null,
   };
 }
 
-function parseGrok(
-  stdout: string,
-  requestedModel: string,
-  effort: Effort
-): ParsedOutput {
+function parseGrok(stdout: string, requestedModel: string): ParsedOutput {
   let result: JsonObject | null = null;
   for (const line of stdout.split("\n")) {
     if (line.trim().length === 0) continue;
@@ -119,80 +119,31 @@ function parseGrok(
   }
 
   if (result === null) throw new Error("grok result did not contain a terminal event");
-  if (result.is_error === true || result.subtype !== "success") {
-    throw new Error("grok reported an error result");
+  if (nullableString(result.subtype) === null || typeof result.is_error !== "boolean") {
+    throw new Error("grok result did not contain a valid terminal status");
   }
-  const text = nullableString(result.result);
-  if (text === null) throw new Error("grok result did not contain final text");
-
-  return {
-    text,
-    reportedModel: modelFromUsage(
-      result.modelUsage,
-      "grok",
-      requestedModel,
-      effort
-    ),
+  const metadata = {
+    reportedModel: modelFromUsage(result.modelUsage, "grok", requestedModel),
     sessionId: nullableString(result.session_id),
     usage: normalizedUsage(result.usage),
     costUsd: finiteNumber(result.total_cost_usd) ?? null,
   };
-}
-
-function parseCursor(stdout: string): ParsedOutput {
-  let reportedModel: string | null = null;
-  let result: JsonObject | null = null;
-  for (const line of stdout.split("\n")) {
-    if (line.trim().length === 0) continue;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(line);
-    } catch {
-      throw new Error("cursor emitted a non-JSON event");
-    }
-    const event = object(raw);
-    if (event?.type === "system" && event.subtype === "init") {
-      reportedModel = nullableString(event.model) ?? reportedModel;
-    }
-    if (event?.type === "result") result = event;
-  }
-
-  if (result === null) {
-    throw new Error("cursor result did not contain a terminal event");
-  }
-  if (result.is_error === true || result.subtype !== "success") {
-    throw new Error("cursor reported an error result");
+  if (result.is_error || result.subtype !== "success") {
+    const errors = Array.isArray(result.errors)
+      ? result.errors.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+      : [];
+    const message = errors.join("\n") || nullableString(result.error)
+      || nullableString(object(result.error)?.message) || nullableString(result.result)
+      || `grok reported ${result.subtype}`;
+    const cancelled = result.stop_reason === "cancelled" || result.stop_reason === "canceled"
+      || result.subtype === "cancelled" || result.subtype === "canceled"
+      || /^(?:User cancel(?:led|ed) the execution|PermissionCancelled)/i.test(message);
+    throw new ProviderResultError(message, cancelled ? "cancelled" : "child-failed", metadata);
   }
   const text = nullableString(result.result);
-  if (text === null) throw new Error("cursor result did not contain final text");
+  if (text === null) throw new Error("grok result did not contain final text");
 
-  return {
-    text,
-    reportedModel,
-    sessionId: nullableString(result.session_id),
-    usage: normalizedUsage(result.usage),
-    costUsd: null,
-  };
-}
-
-export function codexFailureMessage(stdout: string): string | null {
-  let turnFailure: string | null = null;
-  let errorMessage: string | null = null;
-  for (const line of stdout.split("\n")) {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const event = object(raw);
-    if (event?.type === "turn.failed") {
-      turnFailure = nullableString(object(event.error)?.message);
-    } else if (event?.type === "error") {
-      errorMessage = nullableString(event.message);
-    }
-  }
-  return turnFailure ?? errorMessage;
+  return { text, ...metadata };
 }
 
 function parseCodex(stdout: string): ParsedOutput {
@@ -242,31 +193,24 @@ export function parseProviderOutput(
   provider: Provider,
   stdout: string,
   stderr: string,
-  requestedModel: string,
-  effort: Effort
+  requestedModel: string
 ): ParsedOutput {
   switch (provider) {
     case "claude":
-      return parseClaude(stdout, requestedModel, effort);
+      return parseClaude(stdout, requestedModel);
     case "codex":
       return parseCodex(stdout);
     case "grok":
-      return parseGrok(stdout, requestedModel, effort);
-    case "cursor":
-      return parseCursor(stdout);
+      return parseGrok(stdout, requestedModel);
   }
 }
 
 export function reportedModelMatches(
   provider: Provider,
   requested: string,
-  reported: string | null,
-  effort: Effort
+  reported: string | null
 ): boolean {
   if (reported === null) return false;
-  if (provider === "cursor") {
-    return reportsCursorModel(reported, cursorModel(requested, effort));
-  }
   if (provider === "claude" && isRollingClaudeAlias(requested)) {
     return concreteModelMatchesRollingAlias(requested, reported);
   }
