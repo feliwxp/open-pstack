@@ -1,5 +1,17 @@
 # CHANGES — applied substitutions
 
+## 1.5.0-fel.2 ports Cursor pstack 0.15.6 to 0.15.17 skill changes
+
+Open-pstack 1.5.0 stays at Cursor 0.15.5. The fork now ports Cursor's skill changes directly while open-pstack lags, through Cursor `978ca6e`.
+
+New skills: `benchmark-checklist`, `correct`, `poteto-help` (typed-only), `ketchup` (typed-only), and the `principle-explain-the-number` leaf. There are now 24 principle leaves.
+
+Changed: poteto-mode spawns fresh subagents by default and routes measured numbers to `benchmark-checklist`. `poteto-agent` follows the fresh-task rule and keeps its `skills` preload. Autopilot-full, Autopilot-stack, and Multi-phase plan audit every hour through `/loop 1h` and no longer write a standing `/goal` substitute; owners push after every verifiable unit, and a fresh owner takes each next item. Opening a PR uses the `##` body headings. Architect screens designs against agent mistakes and new red flags. Perf-issue and Hillclimb use the performance mantras, and their code seat stays `codex:gpt-6.1-sol@max`. Swarm respawns a worker that missed its brief. `technical-writing` drops its source lines, as upstream did, and the TypeScript patterns take upstream's schema-first validation.
+
+`poteto-help` is adapted for Claude Code and Codex: it reads the model sheet in the harness config home, gives this fork's install commands and the `pstack:` prefix, describes the SessionStart hook in place of Custom Modes, and names Cursor's guide pages as upstream-only. `ketchup` is verbatim.
+
+Skipped: `df58112` (drop Sol; conflicts with the owner's seats and open-pstack's Sol exclusions), `00b14f1` (prompt distillation over heavily adapted skills), and `2cbf585` (Cursor's guide). `UPSTREAM.md` records each reason and when the port ends.
+
 ## 1.5.0-fel.1 follows open-pstack
 
 The fork now follows `ericlitman/open-pstack` 1.5.0. Open-pstack follows Cursor.

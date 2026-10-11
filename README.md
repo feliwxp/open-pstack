@@ -119,6 +119,12 @@ That is the main workflow. The other skills are there when poteto-mode needs the
 | `maintain-verification-skill` | The project's verification instructions no longer match the product. |
 | `babysit` | A pull request needs CI failures and review comments handled until it is ready. |
 | `reflect` | A hard task is finished and its lessons should improve the next run. |
+| `correct` | Agents repeat mistakes that the repo can prevent. |
+| `benchmark-checklist` | A measured speedup or regression needs evidence before you report it. |
+| `poteto-help` | You want help with setup, `poteto-mode`, or picking a skill. Type it with a question. |
+| `ketchup` | You want a plain catch-up on everything in this session since your last message. |
+
+The 24 principle skills use `user-invocable: false`. Poteto-mode reads their index and applies them by name. [Explain the Number](plugins/pstack/skills/principle-explain-the-number/SKILL.md) is the newest verification principle.
 
 Plugin skills include `pstack:` in their name. In Claude Code, invoke a native skill such as `/pstack:architect`. In Codex, ask for the skill, such as `Use pstack:architect for this design.` See the [technical reference](docs/reference.md) for the full list.
 
@@ -155,7 +161,7 @@ This repository also keeps:
 
 ## Staying close to Lauren's pstack
 
-This fork is version 1.5.0-fel.1. It follows [open-pstack 1.5.0](https://github.com/ericlitman/open-pstack). Open-pstack tracks pstack 0.15.5 at Cursor commit [`12d587dfb20741cafc376c42c696c5f6e2a64487`](https://github.com/cursor/plugins/commit/12d587dfb20741cafc376c42c696c5f6e2a64487).
+This fork is version 1.5.0-fel.2. It follows [open-pstack 1.5.0](https://github.com/ericlitman/open-pstack). Open-pstack tracks pstack 0.15.5 at Cursor commit [`12d587dfb20741cafc376c42c696c5f6e2a64487`](https://github.com/cursor/plugins/commit/12d587dfb20741cafc376c42c696c5f6e2a64487). While open-pstack lags, the fork also ports Cursor's skill changes directly: 1.5.0-fel.2 carries the pstack 0.15.6 to 0.15.17 skill changes through Cursor commit [`978ca6e`](https://github.com/cursor/plugins/commit/978ca6e9c0e012047cd5058b8e829240336e704e), apart from the commits [UPSTREAM.md](UPSTREAM.md) lists as skipped.
 
 The two projects have separate version numbers. The pstack version identifies Lauren's upstream content. The Open Pstack version identifies the Claude Code and Codex package built from it.
 
