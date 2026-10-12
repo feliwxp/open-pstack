@@ -58,19 +58,35 @@ function grokTools(mode: AccessMode): string {
   return [...readonly, ...(mode === "isolated-write" ? ["search_replace"] : [])].join(",");
 }
 
-function cursorAccess(mode: AccessMode): readonly string[] {
-  return mode === "read-only" ? ["--mode", "plan"] : ["--force"];
+// Writers run Bash without prompts inside the OS sandbox, which confines writes to the cwd and a
+// per-user temp directory. The model cannot opt a command out, and Claude refuses to start when
+// the sandbox is unavailable. A linked worktree's shared git directory is otherwise writable, so
+// the caller passes its literal path, which discoverSharedGitDir checked for glob characters.
+
+function claudePermissions(mode: AccessMode, sharedGitDir: string | null): string[] {
+  if (mode === "read-only") return ["--permission-mode", "plan"];
+  const sandbox = {
+    enabled: true,
+    autoAllowBashIfSandboxed: true,
+    allowUnsandboxedCommands: false,
+    failIfUnavailable: true,
+    ...(sharedGitDir === null ? {} : { filesystem: { denyWrite: [sharedGitDir] } }),
+  };
+  return ["--permission-mode", "acceptEdits", "--settings", JSON.stringify({ sandbox })];
 }
 
-function permissionMode(mode: AccessMode): string {
-  return mode === "read-only" ? "plan" : "acceptEdits";
+function cursorAccess(mode: AccessMode): readonly string[] {
+  return mode === "read-only" ? ["--mode", "plan"] : ["--force"];
 }
 
 function effortOverride(effort: Effort): string {
   return `model_reasoning_effort=${JSON.stringify(effort)}`;
 }
 
-export function invocationCommand(options: RunnerOptions): CommandSpec {
+export function invocationCommand(
+  options: RunnerOptions,
+  sharedGitDir: string | null = null
+): CommandSpec {
   switch (options.provider) {
     case "claude":
       return {
@@ -81,8 +97,7 @@ export function invocationCommand(options: RunnerOptions): CommandSpec {
           options.model,
           "--effort",
           options.effort,
-          "--permission-mode",
-          permissionMode(options.mode),
+          ...claudePermissions(options.mode, sharedGitDir),
           "--setting-sources",
           "project",
           "--strict-mcp-config",

@@ -4,17 +4,19 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
 import { cursorModel } from "./cursor-models.ts";
 import { versionedClaudeAlias } from "./model-aliases.ts";
 import { codexFailureMessage, parseProviderOutput, ProviderResultError, reportedModelMatches } from "./parse-output.ts";
 import type {
+  AccessMode,
   ParsedOutput,
   Provider,
   ReceiptStatus,
@@ -159,10 +161,46 @@ const CLAUDE_IDENTITY = [
   "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 ] as const;
 
+const GROK_ENVIRONMENT = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "TERM",
+  "COLORTERM",
+  "TZ",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+]);
+
+const GROK_ENVIRONMENT_PREFIXES = ["LC_", "XDG_", "GROK_", "XAI_"] as const;
+
+// A Grok lane's shell can read every variable it inherits in both access modes, so it gets
+// only what grok needs to start, authenticate and reach the network.
+// A Claude writer's git must find its repository from the cwd, as discovery's git did, so
+// an inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
 export function childEnvironment(
   provider: Provider,
+  mode: AccessMode,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
+  if (provider === "grok") {
+    return Object.fromEntries(Object.entries(source).filter(([key]) =>
+      GROK_ENVIRONMENT.has(key) || GROK_ENVIRONMENT_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ));
+  }
   const result = { ...source };
   const remove = provider === "claude"
     ? CODEX_IDENTITY
@@ -170,6 +208,9 @@ export function childEnvironment(
       ? CLAUDE_IDENTITY
       : [...CODEX_IDENTITY, ...CLAUDE_IDENTITY];
   for (const key of remove) delete result[key];
+  if (provider === "claude" && mode === "isolated-write") {
+    for (const key of Object.keys(result)) if (key.startsWith("GIT_")) delete result[key];
+  }
   return result;
 }
 
@@ -431,9 +472,132 @@ async function waitForGrokPreflightRetry(
   }
 }
 
+type SharedGitDiscovery =
+  | { readonly kind: "found"; readonly sharedGitDir: string | null }
+  | {
+    readonly kind: "refused";
+    readonly status: ReceiptStatus;
+    readonly message: string;
+    readonly evidence: string;
+    readonly exitCode: number | null;
+    readonly signal: string | null;
+  };
+
+// Older git has no --path-format, so a relative answer is resolved against the cwd.
+const GIT_COMMON_DIR: CommandSpec = {
+  command: "git",
+  args: ["rev-parse", "--git-common-dir"],
+  stdin: "none",
+};
+
+function within(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+// A linked worktree keeps its refs, objects and index in a git directory outside the cwd. Git
+// itself finds that directory, from the cwd and with the writer's environment, so the deny matches
+// what the writer's own git will use. Returns null for a non-repository or a directory the cwd
+// contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
+// cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
+export async function discoverSharedGitDir(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  deadlineAt: number | null,
+  cancellation: RunCancellation
+): Promise<SharedGitDiscovery> {
+  const refuse = (
+    status: ReceiptStatus,
+    message: string,
+    result: ProcessResult | null = null
+  ): SharedGitDiscovery => ({
+    kind: "refused",
+    status,
+    message,
+    evidence: result === null ? "" : evidence(`${result.stdout}\n${result.stderr}`),
+    exitCode: result?.exitCode ?? null,
+    signal: result?.signal ?? null,
+  });
+  const git = Bun.which(GIT_COMMON_DIR.command, { PATH: env.PATH, cwd });
+  if (git === null) {
+    return refuse(
+      "unavailable-cli",
+      "git executable not found, so the shared git directory cannot be found"
+    );
+  }
+  // The C locale keeps git's "not a git repository" message in the English the check reads.
+  const result = await runProcess(
+    git,
+    GIT_COMMON_DIR,
+    cwd,
+    { ...env, LC_ALL: "C" },
+    "",
+    deadlineAt,
+    cancellation
+  );
+  if (result.cancelledBy !== null) {
+    return refuse(
+      "cancelled",
+      `launcher received ${result.cancelledBy} during shared git directory discovery`,
+      result
+    );
+  }
+  if (result.timedOut) {
+    return refuse("timed-out", "shared git directory discovery timed out", result);
+  }
+  // Only git's "searched and found nothing" answer means no repository. A .git that names a
+  // missing or malformed git directory fails with other wording and is refused.
+  const notARepository =
+    /^fatal: not a git repository \(or any (of the parent directories|parent up to mount point)/m;
+  if (result.exitCode === 128 && notARepository.test(result.stderr)) {
+    return { kind: "found", sharedGitDir: null };
+  }
+  const reported = result.stdout.replace(/\n$/, "");
+  if (result.exitCode !== 0 || reported.length === 0) {
+    return refuse(
+      "child-failed",
+      `git rev-parse --git-common-dir exited with status ${result.exitCode}`,
+      result
+    );
+  }
+  let root: string;
+  let shared: string;
+  try {
+    root = realpathSync(cwd);
+    shared = realpathSync(resolve(root, reported));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return refuse("child-failed", `cannot resolve the shared git directory: ${message}`, result);
+  }
+  if (within(root, shared)) return { kind: "found", sharedGitDir: null };
+  if (within(shared, root)) {
+    return refuse(
+      "child-failed",
+      `cwd ${JSON.stringify(root)} is inside its shared git directory ${JSON.stringify(shared)}, ` +
+        "so the Claude writer sandbox cannot deny that directory without denying the cwd",
+      result
+    );
+  }
+  if (/[*?[\]{}\u0000-\u001f\u007f]/.test(shared)) {
+    return refuse(
+      "child-failed",
+      `shared git directory ${JSON.stringify(shared)} contains a glob or control character, ` +
+        "so the Claude writer sandbox cannot deny it literally",
+      result
+    );
+  }
+  return { kind: "found", sharedGitDir: shared };
+}
+
+// grok names its configured default above the list even when the account cannot use it,
+// so only the lines under the header count.
 function grokModelAvailable(value: string, model: string): boolean {
+  const lines = value.split("\n");
+  const header = lines.findIndex((line) => /^\s*Available models:/.test(line));
+  if (header < 0) return false;
   const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`).test(value);
+  const listed = new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`);
+  return lines.slice(header + 1).some((line) => listed.test(line));
 }
 
 // Cursor standard ids prefix their fast twins, so match the whole listed token.
@@ -468,7 +632,8 @@ function preflightPassed(provider: Provider, model: string, result: ProcessResul
       return /logged in/i.test(combined);
     case "grok":
       return unavailableStatus(combined) === "child-failed"
-        && /\blogged in\b|\bYou are using XAI_API_KEY\./i.test(combined)
+        && /\blogged in\b|\bYou are using XAI_API_KEY\.|\bYou are authenticated via deployment key\./i
+          .test(combined)
         && grokModelAvailable(combined, model);
     case "cursor":
       return preflightListsModel(provider, model, combined);
@@ -481,16 +646,37 @@ function successfulPreflightEvidence(provider: Provider, model: string): string 
     : "authenticated";
 }
 
-const UNAVAILABLE_PATTERNS: readonly (readonly [ReceiptStatus, RegExp])[] = [
-  ["unauthenticated", /not logged in|not authenticated|unauthenticated|authentication|sign in|login required|401 Unauthorized/i],
+// Only preflight output is read for authentication; a failed model call's output can quote
+// the child's own work.
+function unavailableStatus(value: string): ReceiptStatus {
+  if (/not logged in|not authenticated|unauthenticated|authentication|sign in|login required/i.test(value)) {
+    return "unauthenticated";
+  }
+  return modelFailureStatus(value);
+}
+
+// Codex's terminal failure event is the CLI's own report, never model text, so it can name a
+// login lost after the preflight.
+function codexTerminalStatus(message: string): ReceiptStatus {
+  return /401 Unauthorized/i.test(message) ? "unauthenticated" : unavailableStatus(message);
+}
+
+type ModelFailureStatus =
+  | "usage-limited"
+  | "rate-limited"
+  | "unavailable-model"
+  | "unavailable-network"
+  | "child-failed";
+
+const MODEL_FAILURE_PATTERNS: readonly (readonly [ModelFailureStatus, RegExp])[] = [
   ["usage-limited", /hit your usage limit|usage limit reached|usage_limit_reached|out of credits|quota exceeded|insufficient_quota|spend cap|upgrade to Plus/i],
   ["rate-limited", /\b429\b|too many requests|rate[ _]limit/i],
   ["unavailable-model", /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model|unsupported value:.{0,40}not supported with.{0,40}model/i],
   ["unavailable-network", /waiting for network|error sending request|connection refused|connection reset|dns error|failed to lookup address|network is unreachable/i],
 ];
 
-function unavailableStatus(value: string): ReceiptStatus {
-  for (const [status, pattern] of UNAVAILABLE_PATTERNS) {
+function modelFailureStatus(value: string): ModelFailureStatus {
+  for (const [status, pattern] of MODEL_FAILURE_PATTERNS) {
     if (pattern.test(value)) return status;
   }
   return "child-failed";
@@ -680,7 +866,7 @@ async function executeLane(
   const prompt = readFileSync(options.promptPath, "utf8");
   const parentNetworkDisabled = options.parent === "codex"
     && process.env.CODEX_SANDBOX_NETWORK_DISABLED === "1";
-  const env = childEnvironment(options.provider);
+  const env = childEnvironment(options.provider, options.mode);
   const executable = Bun.which(invocation.command, {
     PATH: env.PATH,
     cwd: options.cwd,
@@ -761,6 +947,38 @@ async function executeLane(
     removeIfExists(options.outputPath);
     writeReceipt(options.receiptPath, receipt);
     return { exitCode: statusExitCode(receipt.status), receipt };
+  }
+
+  if (options.provider === "claude" && options.mode === "isolated-write") {
+    const discovery = await discoverSharedGitDir(options.cwd, env, deadlineAt, cancellation);
+    if (discovery.kind === "refused") {
+      const completed = Date.now();
+      receipt = completeReceipt(options, {
+        status: discovery.status,
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        executable,
+        preflight: discovery.status === "cancelled" || discovery.status === "timed-out"
+          ? { ...preflightState, status: discovery.status }
+          : preflightState,
+        argv: [executable, ...invocation.args],
+        exitCode: discovery.exitCode,
+        signal: discovery.signal,
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: null,
+        sessionId: null,
+        usage: null,
+        costUsd: null,
+        error: { message: discovery.message, evidence: discovery.evidence },
+      });
+      removeIfExists(options.outputPath);
+      writeReceipt(options.receiptPath, receipt);
+      return { exitCode: statusExitCode(discovery.status), receipt };
+    }
+    invocation = invocationCommand(options, discovery.sharedGitDir);
+    progress.argv = [executable, ...invocation.args];
   }
 
   const preflightExecutable = executable;
@@ -928,15 +1146,16 @@ async function executeLane(
   if (result.cancelledBy !== null || result.timedOut || result.watcherStopped || providerFailure !== null
       || result.exitCode !== 0) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
+    const codexTerminal = options.provider === "codex" ? codexFailureMessage(result.stdout) : null;
     const status: ReceiptStatus = result.cancelledBy !== null
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
         : result.watcherStopped
           ? "unavailable-network"
-          : providerFailure?.status ?? unavailableStatus(options.provider === "codex"
-            ? codexFailureMessage(result.stdout) ?? result.stderr
-            : rawFailureEvidence);
+          : providerFailure?.status ?? (codexTerminal !== null
+            ? codexTerminalStatus(codexTerminal)
+            : modelFailureStatus(options.provider === "codex" ? result.stderr : rawFailureEvidence));
     const sandboxHint = status === "child-failed" && providerFailure === null && parentNetworkDisabled
       ? "likely cause: Codex parent sandbox has network disabled; see provider-dispatch.md#host-and-parent-prerequisites"
       : null;
