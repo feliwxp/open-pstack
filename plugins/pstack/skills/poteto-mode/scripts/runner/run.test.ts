@@ -13,11 +13,17 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
 import { main } from "./cli.ts";
-import type { Provider, RunnerOptions, RunnerReceipt } from "./types.ts";
+import { type LaneRequest, resolveLane } from "./registry/index.ts";
+import type { Lane, ProviderAdapter } from "./registry/contract.ts";
+import { devin } from "./providers/devin.ts";
+import { opencode } from "./providers/opencode.ts";
+import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
+import type { ProviderId } from "./registry/family.ts";
+import type { RunnerReceipt } from "./types.ts";
 
 let scratch = "";
 let bin = "";
@@ -35,8 +41,7 @@ const name = process.argv[1].split("/").at(-1);
 const isPreflight =
   (name === "claude" && args[0] === "auth") ||
   (name === "codex" && args[0] === "login") ||
-  (name === "grok" && args[0] === "models") ||
-  (name === "cursor-agent" && args[0] === "models");
+  (name === "grok" && args[0] === "models");
 const stage = isPreflight ? "preflight" : "model";
 const startedPath = isPreflight
   ? process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH
@@ -101,22 +106,6 @@ if (name === "grok" && args[0] === "models") {
   console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
   process.exit(0);
 }
-if (name === "cursor-agent" && args[0] === "models") {
-  if (process.env.FAKE_CURSOR_UNAUTH === "1") {
-    console.error("Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.");
-    process.exit(1);
-  }
-  const fastRow = "cursor-grok-4.6-xhigh-fast - Cursor Grok 4.6 Extra High Fast";
-  const offered = process.env.FAKE_CURSOR_MISSING_MODEL === "1"
-    ? "cursor-grok-4.6-low - Cursor Grok 4.6 Low"
-    : process.env.FAKE_CURSOR_ONLY_FAST === "1"
-      ? fastRow
-      : "cursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High\\n" + fastRow +
-        "\\ngrok-4.7-xhigh - Grok 4.7  Extra High" +
-        "\\ngrok-4.7-xhigh-fast - Grok 4.7  Extra High Fast\\u200b\\u200b";
-  console.log("Available models\\n\\nauto - Auto (default)\\n" + offered);
-  process.exit(0);
-}
 const modelIndex = args.findIndex((value) => value === "--model");
 const model = modelIndex >= 0 ? args[modelIndex + 1] : "unknown";
 const reportedModel = model === "fable"
@@ -178,23 +167,7 @@ if (stage === "model" && process.env.GROK_FAKE_SELF_SIGNAL) {
   process.kill(process.pid, process.env.GROK_FAKE_SELF_SIGNAL);
   await Bun.sleep(5_000);
 }
-if (name === "cursor-agent") {
-  const displayNames = {
-    "cursor-grok-4.6-low": "Grok 4.6 Low",
-    "cursor-grok-4.6-medium": "Grok 4.6 Medium",
-    "cursor-grok-4.6-high": "Grok 4.6",
-    "cursor-grok-4.6-xhigh": "Grok 4.6 Extra High",
-    "cursor-grok-4.6-low-fast": "Grok 4.6 Low Fast",
-    "cursor-grok-4.6-medium-fast": "Grok 4.6 Medium Fast",
-    "cursor-grok-4.6-high-fast": "Grok 4.6 Fast",
-    "cursor-grok-4.6-xhigh-fast": "Grok 4.6 Extra High Fast",
-    "grok-4.7-xhigh": "Grok 4.7 256K Extra High",
-    "grok-4.7-xhigh-fast": "Grok 4.7 256K  Extra High Fast\\u200b\\u200b",
-  };
-  const served = process.env.FAKE_CURSOR_SERVED_MODEL || displayNames[model];
-  console.log(JSON.stringify({type:"system",subtype:"init",apiKeySource:"login",session_id:"u1",model:served,permissionMode:"default"}));
-  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"CURSOR_OK",session_id:"u1",request_id:"r1",usage:{inputTokens:40,outputTokens:6,cacheReadTokens:8,cacheWriteTokens:2}}));
-} else if (name === "claude") {
+if (name === "claude") {
   console.log(JSON.stringify({result:"CLAUDE_OK",session_id:"c1",usage:{input_tokens:10,output_tokens:2},total_cost_usd:0.01,modelUsage:{[reportedModel]:{}}}));
 } else if (name === "codex") {
   console.log(JSON.stringify({type:"thread.started",thread_id:"o1"}));
@@ -218,7 +191,7 @@ function makeExecutable(name: string): void {
   chmodSync(path, 0o755);
 }
 
-function options(provider: Provider, suffix: string = provider): RunnerOptions {
+function options(provider: ProviderId, suffix: string = provider): LaneRequest {
   const parent = provider === "codex" ? "claude" : "codex";
   const model =
     provider === "claude"
@@ -230,7 +203,7 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
     parent,
     provider,
     model,
-    effort: provider === "grok" || provider === "cursor" ? "xhigh" : "max",
+    effort: provider === "grok" ? "xhigh" : "max",
     mode: "read-only",
     promptPath: join(scratch, "prompt.md"),
     cwd: scratch,
@@ -240,6 +213,8 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
   };
 }
 
+const laneOf = resolveLane;
+
 function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
 }
@@ -247,7 +222,7 @@ function receipt(path: string): RunnerReceipt {
 // Fixture git never sees the caller's GIT_* routing or hooks. A ceiling, when given, keeps
 // repositories above the fixture root out of discovery.
 function gitEnv(ceiling: string | null = null): NodeJS.ProcessEnv {
-  const env = childEnvironment("claude", "isolated-write");
+  const env = childEnvironment(laneOf({ ...options("claude"), mode: "isolated-write" }));
   return ceiling === null ? env : { ...env, GIT_CEILING_DIRECTORIES: ceiling };
 }
 
@@ -283,7 +258,7 @@ const CODEX_NETWORK_WAIT = {
   message: "Reconnecting... waiting for network (Connection failed: error sending request)",
 } as const;
 
-function runnerArgs(input: RunnerOptions): string[] {
+function runnerArgs(input: LaneRequest): string[] {
   const args = [
     join(import.meta.dir, "pstack-runner"),
     "--parent", input.parent,
@@ -343,11 +318,15 @@ beforeEach(() => {
   bin = join(scratch, "bin");
   mkdirSync(bin);
   writeFileSync(join(scratch, "prompt.md"), "Return the marker.");
-  for (const name of ["claude", "codex", "grok", "cursor-agent"]) makeExecutable(name);
+  for (const name of ["claude", "codex", "grok"]) makeExecutable(name);
   previousPath = process.env.PATH;
   process.env.PATH = `${bin}:${dirname(process.execPath)}:${previousPath ?? ""}`;
   delete process.env.GROK_FAKE_TIMEOUT;
   delete process.env.GROK_FAKE_INVALID_MODEL;
+  delete process.env.GROK_FAKE_FAILURE_TEXT;
+  delete process.env.FAKE_CODEX_FIXTURE;
+  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
+  delete process.env.FAKE_CODEX_CHUNKED;
   delete process.env.GROK_FAKE_CANCEL;
   delete process.env.GROK_FAKE_CANCEL_STAGE;
   delete process.env.GROK_FAKE_IGNORE_SIGNAL;
@@ -369,20 +348,16 @@ beforeEach(() => {
   delete process.env.GROK_FAKE_DESCENDANT_PID_PATH;
   delete process.env.GROK_FAKE_SELF_SIGNAL;
   delete process.env.GROK_FAKE_GROK_ERROR_RESULT;
-  delete process.env.FAKE_CURSOR_UNAUTH;
-  delete process.env.FAKE_CURSOR_MISSING_MODEL;
-  delete process.env.FAKE_CURSOR_ONLY_FAST;
-  delete process.env.FAKE_CURSOR_SERVED_MODEL;
-  delete process.env.FAKE_CODEX_FIXTURE;
-  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
-  delete process.env.FAKE_CODEX_CHUNKED;
-  delete process.env.GROK_FAKE_FAILURE_TEXT;
 });
 
 afterEach(() => {
   process.env.PATH = previousPath;
   delete process.env.GROK_FAKE_TIMEOUT;
   delete process.env.GROK_FAKE_INVALID_MODEL;
+  delete process.env.GROK_FAKE_FAILURE_TEXT;
+  delete process.env.FAKE_CODEX_FIXTURE;
+  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
+  delete process.env.FAKE_CODEX_CHUNKED;
   delete process.env.GROK_FAKE_CANCEL;
   delete process.env.GROK_FAKE_CANCEL_STAGE;
   delete process.env.GROK_FAKE_IGNORE_SIGNAL;
@@ -404,14 +379,6 @@ afterEach(() => {
   delete process.env.GROK_FAKE_DESCENDANT_PID_PATH;
   delete process.env.GROK_FAKE_SELF_SIGNAL;
   delete process.env.GROK_FAKE_GROK_ERROR_RESULT;
-  delete process.env.FAKE_CURSOR_UNAUTH;
-  delete process.env.FAKE_CURSOR_MISSING_MODEL;
-  delete process.env.FAKE_CURSOR_ONLY_FAST;
-  delete process.env.FAKE_CURSOR_SERVED_MODEL;
-  delete process.env.FAKE_CODEX_FIXTURE;
-  delete process.env.FAKE_CODEX_FIXTURE_EXIT_CODE;
-  delete process.env.FAKE_CODEX_CHUNKED;
-  delete process.env.GROK_FAKE_FAILURE_TEXT;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -448,7 +415,7 @@ console.error("ENOTFOUND api.anthropic.com");
 process.exit(1);
 `);
     const input = options("claude");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     const saved = receipt(input.receiptPath);
     expect(JSON.parse(readFileSync(invoked, "utf8"))).toMatchObject({
       argv: expect.arrayContaining(["--model", "fable"]),
@@ -465,7 +432,7 @@ process.exit(1);
     expect(saved.error?.message).toContain("provider-dispatch.md#host-and-parent-prerequisites");
     expect(saved.schemaVersion).toBe(1);
     expect(saved.model).toBe(input.model);
-    expect(saved.effort).toBe(input.effort);
+    expect(saved.effort as string).toBe(input.effort);
     expect(readFileSync(streamPath(saved.stderrPath), "utf8")).toBe("ENOTFOUND api.anthropic.com\n");
     expect(existsSync(input.outputPath)).toBe(false);
   });
@@ -481,7 +448,7 @@ if (process.argv[2] === "auth") {
 console.error("ENOTFOUND api.anthropic.com; EACCES local-state");
 process.exit(1);
 `);
-      const result = await runLane(options("claude"));
+      const result = await runLane(laneOf(options("claude")));
       expect(result.exitCode).toBe(70);
       expect(result.receipt.error).toEqual({
         message: "child exited with status 1",
@@ -500,7 +467,7 @@ if (process.argv[2] === "models") {
 console.error("ENOTFOUND grok.com");
 process.exit(1);
 `);
-    const result = await runLane({ ...options("grok"), parent: "claude" });
+    const result = await runLane(laneOf({ ...options("grok"), parent: "claude" }));
     expect(result.exitCode).toBe(70);
     expect(result.receipt.error).toEqual({
       message: "child exited with status 1",
@@ -520,7 +487,7 @@ process.stderr.write(${JSON.stringify(stderr)});
 process.exit(1);
 `);
     const input = { ...options("grok"), parent: "codex" as const };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(70);
     expect(result.receipt.status).toBe("child-failed");
     expect(result.receipt.error?.evidence).toStartWith("likely cause: Codex parent sandbox has network disabled");
@@ -548,7 +515,7 @@ console.log(${JSON.stringify(terminal)});
 console.error("startup warning".repeat(500));
 process.exit(1);
 `);
-      const result = await runLane({ ...options("grok"), parent: "codex" });
+      const result = await runLane(laneOf({ ...options("grok"), parent: "codex" }));
       expect(result.exitCode).toBe(scenario === "api-error" ? 70 : 130);
       expect(result.receipt.status).toBe(scenario === "api-error" ? "child-failed" : "cancelled");
       expect(result.receipt.error?.message).toBe(reason);
@@ -560,7 +527,7 @@ process.exit(1);
   for (const provider of ["claude", "grok"] as const) {
     it(`leaves successful ${provider} lanes unchanged with the marker`, async () => {
       process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
-      const result = await runLane({ ...options(provider), parent: "codex" });
+      const result = await runLane(laneOf({ ...options(provider), parent: "codex" }));
       expect(result.exitCode).toBe(0);
       expect(result.receipt.status).toBe("complete");
       expect(result.receipt.error).toBeNull();
@@ -575,7 +542,7 @@ process.exit(1);
       if (status === "unavailable-model") process.env.GROK_FAKE_INVALID_MODEL = "1";
       if (status === "unauthenticated") process.env.GROK_FAKE_GROK_UNAUTH = "1";
       if (status === "timed-out") process.env.GROK_FAKE_TIMEOUT = "1";
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.receipt.status).toBe(status);
       expect(result.receipt.error?.message).not.toContain("Codex parent sandbox");
       expect(result.receipt.error?.evidence).not.toContain("Codex parent sandbox");
@@ -619,7 +586,7 @@ process.stdout.write(${JSON.stringify(stdout)});
 process.stderr.write(${JSON.stringify(stderr)});
 process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
 `);
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       const saved = JSON.parse(readFileSync(input.receiptPath, "utf8"));
       expect(saved.status).toBe(scenario === "success-streams" ? "complete"
         : scenario.startsWith("api-error") ? "child-failed" : "cancelled");
@@ -655,7 +622,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       const input = options("grok");
       const conflict = `${input.receiptPath}.${stream}`;
       writeFileSync(conflict, "operator evidence");
-      await expect(runLane(input)).rejects.toThrow();
+      await expect(runLane(laneOf(input))).rejects.toThrow();
       expect(readFileSync(conflict, "utf8")).toBe("operator evidence");
       for (const path of [input.outputPath, input.receiptPath,
         `${input.receiptPath}.${stream === "stdout" ? "stderr" : "stdout"}`]) {
@@ -667,10 +634,10 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       const input = options("grok");
       const conflict = `${input.receiptPath}.${stream}`;
       writeFileSync(conflict, "operator prompt");
-      await expect(runLane({ ...input, promptPath: conflict })).rejects.toThrow("must be distinct");
+      await expect(runLane(laneOf({ ...input, promptPath: conflict }))).rejects.toThrow("must be distinct");
       expect(readFileSync(conflict, "utf8")).toBe("operator prompt");
       rmSync(conflict);
-      await expect(runLane({ ...input, outputPath: conflict })).rejects.toThrow("must be distinct");
+      await expect(runLane(laneOf({ ...input, outputPath: conflict }))).rejects.toThrow("must be distinct");
       for (const path of [input.outputPath, input.receiptPath,
         `${input.receiptPath}.stdout`, `${input.receiptPath}.stderr`]) {
         expect(existsSync(path)).toBe(false);
@@ -694,7 +661,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         Math.min(typeof length === "number" ? length : data.byteLength, 7));
     });
     try {
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(0);
       expect(partialWrites).toBeGreaterThan(1);
       expect(readFileSync(streamPath(result.receipt.stdoutPath))).toEqual(Buffer.from(stdout));
@@ -714,7 +681,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       throw new Error("sidecar storage unavailable");
     });
     try {
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(70);
       expect(result.receipt.status).toBe("child-failed");
       expect(result.receipt.error?.evidence).toContain("sidecar storage unavailable");
@@ -731,7 +698,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
     const bytes = Buffer.from([0, 255, 195, 169, 13, 10]);
     writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
       `process.stderr.write(Buffer.from(${JSON.stringify([...bytes])}));\nconst modelIndex =`));
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(0);
     expect(readFileSync(streamPath(result.receipt.stderrPath))).toEqual(bytes);
   });
@@ -744,7 +711,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
         `process.stdout.write(${JSON.stringify(stdout)}); process.exit(${exitCode});`));
       process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
       expect(result.receipt).toMatchObject({
         status: exitCode === 0 ? "malformed-output" : "child-failed",
@@ -761,7 +728,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
     const input = options("grok");
     writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
       'process.stdout.write(\'{"type":"result","is_error":true}\\n\'); console.error("Not logged in. Run grok auth login."); process.exit(1);\nconst modelIndex ='));
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(70);
     expect(result.receipt).toMatchObject({
       status: "child-failed", exitCode: 1, error: { message: "child exited with status 1" },
@@ -776,7 +743,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         const stderr = "sandbox startup refused\n";
         writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
           `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(${exitCode});\nconst modelIndex =`));
-        const result = await runLane(input);
+        const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
         expect(result.receipt).toMatchObject({
           status: exitCode === 0 ? "malformed-output" : "child-failed",
@@ -795,7 +762,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
       'console.log(JSON.stringify({type:"result",subtype:"api_error",is_error:true,errors:["API unavailable"]})); process.exit(1);'));
     process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(70);
     expect(result.receipt).toMatchObject({
       status: "child-failed", exitCode: 1, reportedModel: null, modelVerified: false,
@@ -809,7 +776,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
   it("retains strict model verification for successful Grok results", async () => {
     const input = options("grok");
     writeFileSync(join(bin, "grok"), fake.replace('[model + "-build"]', '["grok-unexpected"]'));
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(65);
     expect(result.receipt).toMatchObject({ status: "malformed-output", modelVerified: false });
     expect(result.receipt.error?.message).toBe("requested model grok-4.6 was not reported by grok");
@@ -896,10 +863,10 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     });
   }
 
-  for (const provider of ["claude", "codex", "grok", "cursor"] as const) {
+  for (const provider of ["claude", "codex", "grok"] as const) {
     it(`executes and receipts the ${provider} external lane`, async () => {
       const input = options(provider);
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(0);
       expect(readFileSync(input.outputPath, "utf8")).toContain(
         provider.toUpperCase()
@@ -924,9 +891,31 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     });
   }
 
+  it("records the writer sandbox the lane ran with: none for a reader, bounded by default, and full access on opt-in", async () => {
+    const lanes = [
+      [options("codex", "sandbox-reader"), null, "read-only"],
+      [{ ...options("codex", "sandbox-bounded"), mode: "isolated-write" }, "bounded", "workspace-write"],
+      [{ ...options("codex", "sandbox-full"), mode: "isolated-write", writerSandbox: "full-access" }, "full-access", "danger-full-access"],
+    ] as const;
+    for (const [input, writerSandbox, sandbox] of lanes) {
+      expect((await runLane(laneOf(input))).exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect([saved.status, saved.writerSandbox]).toEqual(["complete", writerSandbox]);
+      expect(saved.argv.slice(saved.argv.indexOf("--sandbox"), saved.argv.indexOf("--sandbox") + 2)).toEqual(["--sandbox", sandbox]);
+    }
+  });
+
+  it("records the opted-in writer sandbox on a failure receipt", async () => {
+    process.env.PATH = join(scratch, "empty-bin");
+    mkdirSync(process.env.PATH);
+    const input = { ...options("codex", "sandbox-missing-cli"), mode: "isolated-write", writerSandbox: "full-access" };
+    expect((await runLane(laneOf(input))).exitCode).toBe(69);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "unavailable-cli", writerSandbox: "full-access" });
+  });
+
   it("records Codex's exact argv without fabricating a reported model", async () => {
     const input = options("codex");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(0);
     expect(receipt(input.receiptPath)).toMatchObject({
       status: "complete",
@@ -947,7 +936,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     it(`classifies the Codex ${name} fixture as ${status}`, async () => {
       process.env.FAKE_CODEX_FIXTURE = codexFixture(name);
       const input = options("codex");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(exitCode);
       expect(existsSync(input.outputPath)).toBe(false);
       expect(receipt(input.receiptPath)).toMatchObject({
@@ -956,7 +945,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
         signal: null,
         preflight: { status: "passed" },
         error: {
-          evidence: `Codex fixture stderr\n\n${readFileSync(codexFixture(name), "utf8").trim()}`,
+          evidence: expect.stringContaining(`Codex fixture stderr\n\n${readFileSync(codexFixture(name), "utf8").trim()}`),
         },
       });
     });
@@ -973,10 +962,9 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
       const input = options("codex");
       expect(input.timeoutMs).toBeNull();
       expect(runnerArgs(input)).not.toContain("--timeout");
-      const lane = runLane(input);
+      const lane = runLane(laneOf(input));
       const result = await Promise.race([lane, Bun.sleep(3_000).then(() => null)]);
       if (result === null) {
-        // Bound only the test, and reap the fake so a red run cannot leak it.
         process.kill(Number(readFileSync(started, "utf8")), "SIGKILL");
         await lane;
         throw new Error("Codex network-wait lane did not finish within 3000ms");
@@ -1009,7 +997,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     ]);
     process.env.FAKE_CODEX_FIXTURE_EXIT_CODE = "0";
     const input = options("codex");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(0);
     expect(receipt(input.receiptPath)).toMatchObject({
       status: "complete",
@@ -1032,7 +1020,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
         { type: "item.completed", item: { type: "agent_message", text: "CODEX_OK" } },
         { type: "turn.completed" },
       ]);
-      const result = await runLane(options("codex", progress.type));
+      const result = await runLane(laneOf(options("codex", progress.type)));
       results.push([result.receipt.status, result.exitCode, result.receipt.signal]);
     }
     expect(results).toEqual([["complete", 0, null], ["complete", 0, null]]);
@@ -1046,7 +1034,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     })}\n${readFileSync(codexFixture("unknown-model"), "utf8")}`);
     process.env.FAKE_CODEX_FIXTURE = path;
     const input = options("codex");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(69);
     expect(receipt(input.receiptPath)).toMatchObject({ status: "unavailable-model" });
     expect(result.receipt.error?.evidence).toContain("Earlier rate limit and authentication discussion");
@@ -1083,32 +1071,49 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     const results = [];
     for (const [index, [message]] of cases.entries()) {
       codexScenario([{ type: "turn.failed", error: { message } }]);
-      const result = await runLane(options("codex", `pattern-${index}`));
+      const result = await runLane(laneOf(options("codex", `pattern-${index}`)));
       results.push([message, result.receipt.status, result.exitCode]);
     }
     expect(results).toEqual(cases.map((entry) => [...entry]));
   }, 10_000);
 
+  it("classifies Codex stderr when no terminal event exists and ignores stdout model text", async () => {
+    const cases = [
+      ["401 Unauthorized", "child-failed", 70],
+      ["quota exceeded", "usage-limited", 69],
+      ["429 Too Many Requests", "rate-limited", 75],
+      ["Connection refused", "unavailable-network", 68],
+    ] as const;
+    for (const [index, [message, status, exitCode]] of cases.entries()) {
+      process.env.GROK_FAKE_FAILURE_TEXT = message;
+      const result = await runLane(laneOf(options("codex", `stderr-${index}`)));
+      expect([result.receipt.status, result.exitCode]).toEqual([status, exitCode]);
+    }
+    delete process.env.GROK_FAKE_FAILURE_TEXT;
+    codexScenario([{ type: "item.completed", item: { type: "agent_message", text: "401 Unauthorized; quota exceeded; 429" } }]);
+    const result = await runLane(laneOf(options("codex", "stdout-model-text")));
+    expect([result.receipt.status, result.exitCode]).toEqual(["child-failed", 70]);
+  });
+
   it("classifies combined failure output for other providers and Codex without JSON events", async () => {
     process.env.GROK_FAKE_FAILURE_TEXT = "401 Unauthorized";
     const results = [];
-    for (const provider of ["claude", "codex", "grok", "cursor"] as const) {
-      const result = await runLane(options(provider));
+    for (const provider of ["claude", "codex", "grok"] as const) {
+      const result = await runLane(laneOf(options(provider)));
       results.push([provider, result.receipt.status, result.exitCode]);
-      expect(result.receipt.error?.evidence).toBe("401 Unauthorized");
+      expect(result.receipt.error?.evidence).toEndWith("401 Unauthorized");
     }
     expect(results).toEqual([
       ["claude", "child-failed", 70],
       ["codex", "child-failed", 70],
       ["grok", "child-failed", 70],
-      ["cursor", "child-failed", 70],
     ]);
   });
 
   it("keeps Grok's terminal cancellation reason in bounded evidence", async () => {
     process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
     const input = options("grok", "grok-error-result");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(130);
     expect(existsSync(input.outputPath)).toBe(false);
     const recorded = receipt(input.receiptPath);
@@ -1124,7 +1129,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
   it("classifies an unavailable model without falling back", async () => {
     process.env.GROK_FAKE_INVALID_MODEL = "1";
     const input = options("codex");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(69);
     expect(existsSync(input.outputPath)).toBe(false);
     expect(receipt(input.receiptPath)).toMatchObject({
@@ -1154,7 +1159,7 @@ console.${stream === "stdout" ? "log" : "error"}(${JSON.stringify(text)});
 process.exit(1);
 `);
         const input = options("codex");
-        const result = await runLane(input);
+        const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(70);
         expect(result.receipt).toMatchObject({
           status: "child-failed",
@@ -1174,7 +1179,7 @@ process.exit(1);
     process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-api-key");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(0);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1196,7 +1201,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-unsupported");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(69);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1218,7 +1223,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-api-key-unauth");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(77);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\nattempt\n");
@@ -1239,7 +1244,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-neighbor");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(69);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1282,7 +1287,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = { ...options("grok", "grok-listing"), model: "grok-4.7" };
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(passes ? 0 : 69);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1304,7 +1309,7 @@ const startedPath =`));
       process.env.GROK_PSTACK_CANARY = "kept";
       try {
         const input = { ...options("grok", `grok-env-${mode}`), mode };
-        const result = await runLane(input);
+        const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(0);
         expect(readFileSync(captured, "utf8")).toBe(
           "preflight GROK_PSTACK_CANARY\nmodel GROK_PSTACK_CANARY\n"
@@ -1324,7 +1329,7 @@ const startedPath =`));
     const modelStarted = join(scratch, "grok-transient-model.started");
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-transient-unauth");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(0);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\nattempt\n");
@@ -1348,7 +1353,7 @@ const startedPath =`));
     const modelStarted = join(scratch, "grok-model.started");
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-unauthenticated");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(77);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\nattempt\n");
@@ -1373,7 +1378,7 @@ const startedPath =`));
       ...options("grok", "grok-preflight-retry-deadline"),
       timeoutMs: 700,
     };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     const recorded = receipt(input.receiptPath);
 
     expect(result.exitCode).toBe(124);
@@ -1427,7 +1432,7 @@ const startedPath =`));
     const modelStarted = join(scratch, "grok-missing-model.started");
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-missing-model");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(69);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1438,222 +1443,10 @@ const startedPath =`));
     });
   });
 
-  it("classifies a Cursor login failure without running the model", async () => {
-    process.env.FAKE_CURSOR_UNAUTH = "1";
-    const modelStarted = join(scratch, "cursor-unauth-model.started");
-    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
-    const input = options("cursor", "cursor-unauthenticated");
-    const result = await runLane(input);
-
-    expect(result.exitCode).toBe(77);
-    expect(existsSync(modelStarted)).toBe(false);
-    expect(existsSync(input.outputPath)).toBe(false);
-    expect(receipt(input.receiptPath)).toMatchObject({
-      status: "unauthenticated",
-      preflight: { status: "failed" },
-    });
-    expect(receipt(input.receiptPath).preflight.evidence).toContain(
-      "Authentication required"
-    );
-  });
-
-  it("classifies a Cursor model the account is not offered", async () => {
-    process.env.FAKE_CURSOR_MISSING_MODEL = "1";
-    const modelStarted = join(scratch, "cursor-missing-model.started");
-    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
-    const input = options("cursor", "cursor-missing-model");
-    const result = await runLane(input);
-
-    expect(result.exitCode).toBe(69);
-    expect(existsSync(modelStarted)).toBe(false);
-    expect(receipt(input.receiptPath)).toMatchObject({
-      status: "unavailable-model",
-      preflight: { status: "failed" },
-    });
-  });
-
-  it("refuses a standard Cursor row that only the fast twin lists", async () => {
-    process.env.FAKE_CURSOR_ONLY_FAST = "1";
-    const modelStarted = join(scratch, "cursor-only-fast.started");
-    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
-    const input = options("cursor", "cursor-only-fast");
-    const result = await runLane(input);
-
-    expect(result.exitCode).toBe(69);
-    expect(existsSync(modelStarted)).toBe(false);
-    expect(existsSync(input.outputPath)).toBe(false);
-    expect(receipt(input.receiptPath)).toMatchObject({
-      status: "unavailable-model",
-      preflight: { status: "failed" },
-    });
-    expect(receipt(input.receiptPath).preflight.evidence).toContain(
-      "cursor-grok-4.6-xhigh-fast"
-    );
-  });
-
-  for (const effort of ["max", "ultra"] as const) {
-    it(`refuses Cursor ${effort} before any preflight`, async () => {
-      const preflightStarted = join(scratch, `cursor-${effort}-preflight.started`);
-      process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
-      const input = {
-        ...options("cursor", `cursor-${effort}`),
-        effort,
-      };
-      const result = await runLane(input);
-
-      expect(result.exitCode).toBe(69);
-      expect(existsSync(preflightStarted)).toBe(false);
-      expect(existsSync(input.outputPath)).toBe(false);
-      expect(receipt(input.receiptPath)).toMatchObject({
-        status: "unavailable-model",
-        model: "grok-4.6",
-        effort,
-        argv: [],
-        preflight: { status: "not-run" },
-        modelVerified: false,
-        modelEvidence: null,
-        error: { message: `cursor does not offer grok-4.6 at effort ${effort}` },
-      });
-    });
-  }
-
-  it("refuses a Cursor effort with no model row before any preflight", async () => {
-    const preflightStarted = join(scratch, "cursor-max-preflight.started");
-    process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
-    const input = {
-      ...options("cursor", "cursor-max"),
-      effort: "max" as const,
-    };
-    const result = await runLane(input);
-
-    expect(result.exitCode).toBe(69);
-    expect(existsSync(preflightStarted)).toBe(false);
-    expect(existsSync(input.outputPath)).toBe(false);
-    expect(receipt(input.receiptPath)).toMatchObject({
-      status: "unavailable-model",
-      model: "grok-4.6",
-      effort: "max",
-      argv: [],
-      preflight: { status: "not-run" },
-      modelVerified: false,
-      modelEvidence: null,
-      error: { message: "cursor does not offer grok-4.6 at effort max" },
-    });
-  });
-
-  it("verifies the Cursor lane against the display name of the requested model", async () => {
-    const matched = options("cursor", "cursor-verified");
-    expect((await runLane(matched)).exitCode).toBe(0);
-    expect(receipt(matched.receiptPath)).toMatchObject({
-      status: "complete",
-      reportedModel: "Grok 4.6 Extra High",
-      modelVerified: true,
-      modelEvidence: "provider-report",
-      sessionId: "u1",
-      usage: {
-        inputTokens: 40,
-        outputTokens: 6,
-        cachedInputTokens: 8,
-        cacheCreationInputTokens: 2,
-      },
-      costUsd: null,
-    });
-    expect(receipt(matched.receiptPath).argv).toContain("cursor-grok-4.6-xhigh");
-    expect(receipt(matched.receiptPath).argv).not.toContain(
-      "cursor-grok-4.6-xhigh-fast"
-    );
-
-    const fast = { ...options("cursor", "cursor-fast"), model: "grok-4.6-fast" };
-    expect((await runLane(fast)).exitCode).toBe(0);
-    expect(receipt(fast.receiptPath)).toMatchObject({
-      status: "complete",
-      reportedModel: "Grok 4.6 Extra High Fast",
-      modelVerified: true,
-      modelEvidence: "provider-report",
-    });
-    expect(receipt(fast.receiptPath).argv).toContain("cursor-grok-4.6-xhigh-fast");
-  });
-
-  it("verifies a Grok 4.7 lane whose served name has Cursor's odd spacing", async () => {
-    const standard = { ...options("cursor", "cursor-4.7"), model: "grok-4.7" };
-    expect((await runLane(standard)).exitCode).toBe(0);
-    expect(receipt(standard.receiptPath)).toMatchObject({
-      status: "complete",
-      reportedModel: "Grok 4.7 256K Extra High",
-      modelVerified: true,
-      modelEvidence: "provider-report",
-    });
-    expect(receipt(standard.receiptPath).argv).toContain("grok-4.7-xhigh");
-    expect(receipt(standard.receiptPath).argv).not.toContain("grok-4.7-xhigh-fast");
-
-    const fast = { ...options("cursor", "cursor-4.7-fast"), model: "grok-4.7-fast" };
-    expect((await runLane(fast)).exitCode).toBe(0);
-    expect(receipt(fast.receiptPath)).toMatchObject({
-      status: "complete",
-      reportedModel: "Grok 4.7 256K  Extra High Fast\u200b\u200b",
-      modelVerified: true,
-      modelEvidence: "provider-report",
-    });
-    expect(receipt(fast.receiptPath).argv).toContain("grok-4.7-xhigh-fast");
-  });
-
-  it("verifies a Grok 4.7 lane whose stream reports the listing name", async () => {
-    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.7  Extra High";
-    const listed = { ...options("cursor", "cursor-4.7-listed"), model: "grok-4.7" };
-    expect((await runLane(listed)).exitCode).toBe(0);
-    expect(receipt(listed.receiptPath)).toMatchObject({
-      status: "complete",
-      reportedModel: "Grok 4.7  Extra High",
-      modelVerified: true,
-      modelEvidence: "provider-report",
-    });
-
-    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.7  Extra High Fast​​";
-    const fastServed = { ...options("cursor", "cursor-4.7-fast-served"), model: "grok-4.7" };
-    expect((await runLane(fastServed)).exitCode).toBe(65);
-    expect(existsSync(fastServed.outputPath)).toBe(false);
-    expect(receipt(fastServed.receiptPath)).toMatchObject({
-      status: "malformed-output",
-      modelVerified: false,
-      error: { message: "requested model grok-4.7 was not reported by cursor" },
-    });
-  });
-
-  it("refuses a Cursor lane served the other speed tier's display name", async () => {
-    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High Fast";
-    const mismatched = options("cursor", "cursor-mismatched");
-    const result = await runLane(mismatched);
-    expect(result.exitCode).toBe(65);
-    expect(existsSync(mismatched.outputPath)).toBe(false);
-    expect(receipt(mismatched.receiptPath)).toMatchObject({
-      status: "malformed-output",
-      reportedModel: null,
-      modelVerified: false,
-      modelEvidence: null,
-      error: { message: "requested model grok-4.6 was not reported by cursor" },
-    });
-
-    process.env.FAKE_CURSOR_SERVED_MODEL = "Grok 4.6 Extra High";
-    const reversed = {
-      ...options("cursor", "cursor-reversed"),
-      model: "grok-4.6-fast",
-    };
-    expect((await runLane(reversed)).exitCode).toBe(65);
-    expect(existsSync(reversed.outputPath)).toBe(false);
-    expect(receipt(reversed.receiptPath)).toMatchObject({
-      status: "malformed-output",
-      reportedModel: null,
-      modelVerified: false,
-      error: {
-        message: "requested model grok-4.6-fast was not reported by cursor",
-      },
-    });
-  });
-
   it("kills a timed-out child and preserves a failure receipt", async () => {
     process.env.GROK_FAKE_TIMEOUT = "1";
     const input = { ...options("claude"), timeoutMs: 30 };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(124);
     expect(existsSync(input.outputPath)).toBe(false);
     expect(receipt(input.receiptPath).status).toBe("timed-out");
@@ -1761,7 +1554,7 @@ const startedPath =`));
     process.env.GROK_FAKE_PREFLIGHT_DELAY_MS = "1200";
     process.env.GROK_FAKE_MODEL_DELAY_MS = "1200";
     const input = { ...options("claude"), timeoutMs: 1_500 };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     const recorded = receipt(input.receiptPath);
 
     expect(result.exitCode).toBe(124);
@@ -1998,7 +1791,7 @@ const startedPath =`));
     expect(receipt(input.receiptPath).status).toBe("cancelled");
 
     const retry = options("codex", "cancelled-retry");
-    const result = await runLane(retry);
+    const result = await runLane(laneOf(retry));
     expect(result.exitCode).toBe(0);
     expect(receipt(retry.receiptPath).status).toBe("complete");
   });
@@ -2007,7 +1800,7 @@ const startedPath =`));
     process.env.PATH = join(scratch, "empty-bin");
     mkdirSync(process.env.PATH);
     const input = options("grok");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(69);
     expect(existsSync(input.outputPath)).toBe(false);
     expect(receipt(input.receiptPath).status).toBe("unavailable-cli");
@@ -2016,7 +1809,7 @@ const startedPath =`));
   it("runs simultaneous same-provider lanes only into their unique paths", async () => {
     const first = options("grok", "first");
     const second = options("grok", "second");
-    const results = await Promise.all([runLane(first), runLane(second)]);
+    const results = await Promise.all([runLane(laneOf(first)), runLane(laneOf(second))]);
     expect(results.map((result) => result.exitCode)).toEqual([0, 0]);
     expect(first.outputPath).not.toBe(second.outputPath);
     expect(receipt(first.receiptPath).sessionId).toBe("g1");
@@ -2026,7 +1819,7 @@ const startedPath =`));
   it("refuses a second writer for an already-reserved path", async () => {
     const input = options("claude");
     writeFileSync(input.outputPath, "owned");
-    await expect(runLane(input)).rejects.toThrow();
+    await expect(runLane(laneOf(input))).rejects.toThrow();
     expect(readFileSync(input.outputPath, "utf8")).toBe("owned");
     expect(existsSync(input.receiptPath)).toBe(false);
   });
@@ -2092,7 +1885,7 @@ const startedPath =`));
 
     makeExecutable("claude");
     const retry = options("claude", "post-reservation-retry");
-    expect((await runLane(retry)).exitCode).toBe(0);
+    expect((await runLane(laneOf(retry))).exitCode).toBe(0);
     expect(receipt(retry.receiptPath).status).toBe("complete");
   });
 
@@ -2120,14 +1913,14 @@ const startedPath =`));
     expect(existsSync(input.outputPath)).toBe(false);
   });
 
-  it("rejects same-provider recursion", async () => {
+  it("rejects same-provider recursion", () => {
     const input = { ...options("claude"), parent: "claude" as const };
-    await expect(runLane(input)).rejects.toThrow("native to parent");
+    expect(() => laneOf(input)).toThrow("native to parent");
   });
 
-  it("rejects a versioned Claude family before it can stay pinned", async () => {
+  it("rejects a versioned Claude family before it can stay pinned", () => {
     const input = { ...options("claude"), model: "claude-fable-9-9" };
-    await expect(runLane(input)).rejects.toThrow(
+    expect(() => laneOf(input)).toThrow(
       "normalize it to fable before invoking the runner"
     );
     expect(existsSync(input.outputPath)).toBe(false);
@@ -2135,7 +1928,282 @@ const startedPath =`));
   });
 });
 
+describe("devin lanes", () => {
+  const LOGGED_IN = "Logged in (via Devin).\n\nUser: <redacted>";
+  const DEVIN_VARIABLES = ["DEVIN_PERMISSION_MODE", "DEVIN_SANDBOX", "DEVIN_MODEL", "DEVIN_REFUSAL_FALLBACK"];
+
+  // A Devin stand-in: `auth status` prints `status`; the model call runs `turn`, which sees `args`, `at`,
+  // `exportPath` and `config`. The child environment keeps no test variable, so each case bakes its own.
+  function fakeDevin(status: string, turn: string): void {
+    writeFileSync(join(bin, "devin"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "auth") {
+  console.log(${JSON.stringify(status)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const exportPath = at("--export"), config = at("--config");
+${turn}
+`);
+    chmodSync(join(bin, "devin"), 0o755);
+  }
+
+  // Reports what the child saw as the export's final message, and prints a decoy on stdout.
+  const OBSERVE = `const observed = {
+  model: at("--model"),
+  exportAbsent: !existsSync(exportPath),
+  dirMode: (statSync(dirname(config)).mode & 0o777).toString(8),
+  configMode: (statSync(config).mode & 0o777).toString(8),
+  subagents: JSON.parse(readFileSync(config, "utf8")).subagents_enabled,
+  devinVariables: Object.keys(process.env).filter((key) => key.startsWith("DEVIN_")),
+};
+console.log("Welcome to Devin CLI!\\nSTDOUT_IS_NOT_THE_REPLY");
+writeFileSync(exportPath, JSON.stringify({
+  session_id: "d1",
+  steps: [{ source: "agent", message: JSON.stringify(observed), extra: { generation_model: at("--model") } }],
+  final_metrics: { total_prompt_tokens: 5, total_completion_tokens: 2 },
+}));`;
+
+  function devinOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DEVIN_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DEVIN_VARIABLES) delete process.env[name];
+  });
+
+  for (const [model, effort, cliModel] of [["swe-2", "max", "swe-2-max"], ["swe-1.6", "default", "swe-1-6"]] as const) {
+    it(`runs devin:${model}@${effort} as ${cliModel}, with the reply and proof from the export`, async () => {
+      fakeDevin(LOGGED_IN, OBSERVE);
+      const input = devinOptions(`devin-${model}`, { model, effort });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "devin",
+        model,
+        effort,
+        mode: "read-only",
+        reportedModel: cliModel,
+        modelVerified: true,
+        modelEvidence: "provider-report",
+        sessionId: "d1",
+        usage: { inputTokens: 5, outputTokens: 2 },
+        preflight: { status: "passed", evidence: "authenticated" },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "-p", "--prompt-file", input.promptPath, "--model", cliModel, "--permission-mode", "auto",
+        "--respect-workspace-trust", "false", "--export", join(dir, "export.json"), "--config", join(dir, "lockdown.json"),
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        exportAbsent: true,
+        dirMode: "700",
+        configMode: "600",
+        subagents: false,
+        devinVariables: [],
+      });
+      expect(readFileSync(streamPath(saved.stdoutPath), "utf8")).toContain("STDOUT_IS_NOT_THE_REPLY");
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+  }
+
+  it("refuses an export whose generation model is not the CLI model ID", async () => {
+    fakeDevin(LOGGED_IN, `writeFileSync(exportPath, JSON.stringify({ steps: [{ source: "agent", message: "OK", extra: { generation_model: "swe-2" } }] }));`);
+    const input = devinOptions("devin-mismatch");
+    expect((await runLane(laneOf(input))).exitCode).toBe(65);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      error: { message: "requested model swe-2 was not reported by devin" },
+    });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["logged out at exit 0", "Not logged in.\n  Credentials path: /home/fixture/.local/share/devin/credentials.toml", 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to Devin CLI!", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "devin-model.started");
+      fakeDevin(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = devinOptions(`devin-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an unknown model, a rejected tool and SIGTERM from the captured shapes", async () => {
+    fakeDevin(LOGGED_IN, `console.error("Error: Unknown model: 'swe-2-max'\\nAvailable: adaptive, swe-2, swe-1.6");
+process.exit(1);`);
+    const unknown = devinOptions("devin-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDevin(LOGGED_IN, `console.error("warning: rejected a tool call that requires confirmation.");
+writeFileSync(exportPath, JSON.stringify({ steps: [{ source: "agent", message: "", extra: { generation_model: at("--model") } }] }));`);
+    const rejected = devinOptions("devin-rejected");
+    const rejectedResult = await runLane(laneOf(rejected));
+    expect(rejectedResult.exitCode).toBe(70);
+    expect(rejectedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      error: { message: "devin ended with an empty final message" },
+    });
+    expect(rejectedResult.receipt.error?.evidence).toContain("rejected a tool call");
+    expect(existsSync(rejected.outputPath)).toBe(false);
+
+    fakeDevin(LOGGED_IN, `process.stdout.write("partial reply");
+process.kill(process.pid, "SIGTERM");
+await Bun.sleep(5_000);`);
+    const terminated = devinOptions("devin-sigterm");
+    const terminatedResult = await runLane(laneOf(terminated));
+    expect(terminatedResult.exitCode).toBe(130);
+    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
+    expect(existsSync(terminated.outputPath)).toBe(false);
+  });
+
+  it("refuses a lane whose provider directory already exists and rolls back its reservations", async () => {
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const input = devinOptions("devin-taken");
+    mkdirSync(`${input.receiptPath}.provider`);
+    await expect(runLane(laneOf(input))).rejects.toThrow();
+    for (const path of [input.outputPath, input.receiptPath, `${input.receiptPath}.stdout`, `${input.receiptPath}.stderr`]) {
+      expect([path, existsSync(path)]).toEqual([path, false]);
+    }
+  });
+
+  it("runs a Devin lane in a repository that holds .devin/", async () => {
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const repo = join(scratch, "repo");
+    fs.mkdirSync(join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(join(repo, ".devin"));
+    const input = devinOptions("devin-repo-config", { cwd: repo });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
+  it("refuses an isolated-write Devin lane before launch", () => {
+    const input = devinOptions("devin-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider devin does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+// A provider that uses every optional part of the contract: run-owned environment values, a nested sidecar config
+// with no output file and a stdin envelope.
+const STAND_IN_CONFIG = ".agents/agents/lane.md";
+const STAND_IN: ProviderAdapter = {
+  ...devin,
+  executable: "standin",
+  effortIn: "config",
+  preflight: {
+    argv: () => ["preflight"],
+    retryAfterUnauthenticatedMs: null,
+    classify: (run) => run.exitCode === 0 ? { kind: "passed", evidence: run.stdout.trim() } : { kind: "inconclusive" },
+  },
+  launch: {
+    prompt: "stdin",
+    sidecar: { output: null, config: { name: STAND_IN_CONFIG, content: (lane) => `effort: ${lane.effort}\n` } },
+    supports: ["read-only"],
+    stdinEnvelope: (prompt) => `${JSON.stringify({ event: "user", message: { role: "user", content: prompt } })}\n`,
+    needsSharedGitDir: () => false,
+    argv: () => ["run"],
+  },
+  parse: (run) => ({
+    kind: "complete",
+    text: run.stdout,
+    metadata: { reportedModel: null, sessionId: null, usage: null, costUsd: null },
+  }),
+  proof: { report: "absent", matches: () => false },
+  environment: (_access, sidecarDir) => ({
+    kind: "allowlist",
+    names: BASE_ALLOWLIST,
+    prefixes: BASE_PREFIXES,
+    set: { XDG_CONFIG_HOME: `${sidecarDir}`, STAND_IN_CONFIG: `${sidecarDir}/${STAND_IN_CONFIG}`, CODEX_THREAD_ID: "restored" },
+  }),
+};
+
+function standInLane(suffix: string, overrides: Partial<LaneRequest> = {}): Lane {
+  return { ...laneOf({ ...options("grok", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides }), adapter: STAND_IN };
+}
+
+describe("stand-in provider contract", () => {
+  let inherited: string | undefined;
+  beforeEach(() => {
+    // The preflight reports what it sees; the model call echoes stdin.
+    writeFileSync(join(bin, "standin"), `#!/usr/bin/env bun
+import { readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+if (process.argv[2] === "preflight") {
+  const config = process.env.STAND_IN_CONFIG;
+  console.log(JSON.stringify({
+    xdg: process.env.XDG_CONFIG_HOME,
+    codexThread: process.env.CODEX_THREAD_ID ?? null,
+    config: readFileSync(config, "utf8"),
+    modes: [mode(dirname(dirname(config))), mode(dirname(config)), mode(config)],
+  }));
+  process.exit(0);
+}
+process.stdout.write(await Bun.stdin.text());
+`);
+    chmodSync(join(bin, "standin"), 0o755);
+    inherited = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "/inherited/config";
+  });
+  afterEach(() => {
+    if (inherited === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = inherited;
+  });
+
+  it("creates the nested config before the preflight, which sees the set environment, and sends the envelope", async () => {
+    const lane = standInLane("stand-in");
+    writeFileSync(lane.promptPath, "Return \"the\" marker.\n");
+    const result = await runLane(lane);
+    expect(result.exitCode).toBe(0);
+    const dir = `${lane.receiptPath}.provider`;
+    expect(result.receipt).toMatchObject({
+      status: "complete",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      preflight: { status: "passed" },
+    });
+    expect(JSON.parse(result.receipt.preflight.evidence)).toEqual({
+      xdg: dir,
+      codexThread: null,
+      config: "effort: max\n",
+      modes: ["700", "700", "600"],
+    });
+    expect(readFileSync(lane.outputPath, "utf8"))
+      .toBe(`${JSON.stringify({ event: "user", message: { role: "user", content: "Return \"the\" marker.\n" } })}\n`);
+  });
+});
+
 describe("childEnvironment", () => {
+  it("applies an adapter's set values after filtering and drops the parent identity markers last", () => {
+    const lane = standInLane("stand-in-env");
+    const source = { PATH: "/bin", XDG_CONFIG_HOME: "/inherited", XDG_DATA_HOME: "/data", CODEX_THREAD_ID: "parent", GITHUB_TOKEN: "t" };
+    const dir = `${lane.receiptPath}.provider`;
+    expect(childEnvironment(lane, source)).toEqual({
+      PATH: "/bin",
+      XDG_CONFIG_HOME: dir,
+      XDG_DATA_HOME: "/data",
+      STAND_IN_CONFIG: `${dir}/${STAND_IN_CONFIG}`,
+    });
+  });
+
   it("removes only inherited runtime identity needed to avoid nested detection", () => {
     const source = {
       PATH: "/bin",
@@ -2145,24 +2213,18 @@ describe("childEnvironment", () => {
       CLAUDE_CODE_CHILD_SESSION: "1",
       KEEP_ME: "yes",
     };
-    expect(childEnvironment("claude", "read-only", source)).toEqual({
+    expect(childEnvironment(laneOf({ ...options("claude"), mode: "read-only" }), source)).toEqual({
       PATH: "/bin",
       CLAUDECODE: "1",
       CLAUDE_CODE_CHILD_SESSION: "1",
       KEEP_ME: "yes",
     });
-    expect(childEnvironment("codex", "read-only", source)).toEqual({
+    expect(childEnvironment(laneOf({ ...options("codex"), mode: "read-only" }), source)).toEqual({
       PATH: "/bin",
       CODEX_THREAD_ID: "codex",
       CODEX_CI: "1",
       KEEP_ME: "yes",
     });
-    for (const mode of ["read-only", "isolated-write"] as const) {
-      expect(childEnvironment("cursor", mode, source)).toEqual({
-        PATH: "/bin",
-        KEEP_ME: "yes",
-      });
-    }
   });
 
   it("passes a Grok lane only allowlisted variables in both modes", () => {
@@ -2188,21 +2250,49 @@ describe("childEnvironment", () => {
       cases.filter(([, keep]) => keep).map(([name]) => [name, `${name}-value`])
     );
     for (const mode of ["read-only", "isolated-write"] as const) {
-      expect(childEnvironment("grok", mode, source)).toEqual(kept);
+      expect(childEnvironment(laneOf({ ...options("grok"), mode }), source)).toEqual(kept);
     }
     const { CODEX_THREAD_ID: _codex, ...withoutCodex } = source;
     const { CLAUDECODE: _claude, ...withoutClaude } = source;
     for (const mode of ["read-only", "isolated-write"] as const) {
-      expect(childEnvironment("claude", mode, source)).toEqual(withoutCodex);
-      expect(childEnvironment("codex", mode, source)).toEqual(withoutClaude);
+      expect(childEnvironment(laneOf({ ...options("claude"), mode }), source)).toEqual(withoutCodex);
+      expect(childEnvironment(laneOf({ ...options("codex"), mode }), source)).toEqual(withoutClaude);
     }
+  });
+
+  it("passes a Devin lane the shared base allowlist without any DEVIN_* or Grok variable", () => {
+    const cases: [name: string, kept: boolean][] = [
+      ["PATH", true],
+      ["HOME", true],
+      ["TZ", true],
+      ["LC_ALL", true],
+      ["XDG_DATA_HOME", true],
+      ["HTTPS_PROXY", true],
+      ["NODE_EXTRA_CA_CERTS", true],
+      ["DEVIN_PERMISSION_MODE", false],
+      ["DEVIN_SANDBOX", false],
+      ["DEVIN_MODEL", false],
+      ["DEVIN_REFUSAL_FALLBACK", false],
+      ["GROK_HOME", false],
+      ["XAI_API_KEY", false],
+      ["GITHUB_TOKEN", false],
+      ["CLAUDECODE", false],
+      ["CODEX_THREAD_ID", false],
+    ];
+    const source = Object.fromEntries(cases.map(([name]) => [name, `${name}-value`]));
+    const kept = Object.fromEntries(cases.filter(([, keep]) => keep).map(([name]) => [name, `${name}-value`]));
+    const devin = laneOf({ ...options("grok"), provider: "devin", model: "swe-2", effort: "max" });
+    expect(childEnvironment(devin, source)).toEqual(kept);
+    const grokOnly = ["GROK_HOME", "XAI_API_KEY"];
+    expect(Object.keys(childEnvironment(laneOf(options("grok")), source)).sort())
+      .toEqual([...Object.keys(kept), ...grokOnly].sort());
   });
 
   it("drops GIT_* only for a Claude writer", () => {
     const source = { PATH: "/bin", GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere" };
-    expect(childEnvironment("claude", "isolated-write", source)).toEqual({ PATH: "/bin" });
-    expect(childEnvironment("claude", "read-only", source)).toEqual(source);
-    expect(childEnvironment("codex", "isolated-write", source)).toEqual(source);
+    expect(childEnvironment(laneOf({ ...options("claude"), mode: "isolated-write" }), source)).toEqual({ PATH: "/bin" });
+    expect(childEnvironment(laneOf({ ...options("claude"), mode: "read-only" }), source)).toEqual(source);
+    expect(childEnvironment(laneOf({ ...options("codex"), mode: "isolated-write" }), source)).toEqual(source);
   });
 });
 
@@ -2262,5 +2352,862 @@ describe("discoverSharedGitDir", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("opencode lanes", () => {
+  const MODEL = "opencode/deepseek-v4.1-flash-free";
+  const LISTED = `opencode/big-pickle\n${MODEL}\nopencode/nemotron-3-ultra-free`;
+  const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
+  const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
+
+  // An OpenCode stand-in: `models` runs `models`; the model call runs `turn`, which
+  // sees `args` and `prompt`. Each call appends its kind to `opencode.calls` next to the stand-in, and its cwd,
+  // environment and config file to `opencode.contexts`. The child environment keeps no test variable, so each case
+  // bakes its own.
+  function fakeOpencode(models: string, turn: string): void {
+    writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const call = (kind) => {
+  appendFileSync(join(dirname(process.argv[1]), "opencode.calls"), kind + "\\n");
+  const context = { cwd: process.cwd(), env: process.env, config: readFileSync(process.env.OPENCODE_CONFIG, "utf8") };
+  appendFileSync(join(dirname(process.argv[1]), "opencode.contexts"), JSON.stringify(context) + "\\n");
+};
+if (args[0] === "models") {
+call("preflight");
+${models}
+}
+call("model");
+const prompt = await Bun.stdin.text();
+const emit = (value) => console.log(JSON.stringify(value));
+${turn}
+`);
+    chmodSync(join(bin, "opencode"), 0o755);
+  }
+
+  const LIST = `console.log(${JSON.stringify(LISTED)}); process.exit(0);`;
+  // Reports what the child saw as the reply, over two steps, the first ending on an allowed tool call.
+  const OBSERVE = `const config = process.env.OPENCODE_CONFIG;
+const observed = {
+  args,
+  prompt,
+  xdg: process.env.XDG_CONFIG_HOME === dirname(config),
+  modes: [(statSync(dirname(config)).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
+  permission: JSON.parse(readFileSync(config, "utf8")).permission["*"],
+  opencode: Object.keys(process.env).filter((key) => key.startsWith("OPENCODE_") || key.endsWith("_API_KEY")).sort(),
+};
+emit(${JSON.stringify(event("step_start"))});
+emit(${JSON.stringify(event("step_finish", { reason: "tool-calls", tokens: { total: 10, input: 6, output: 3, reasoning: 1, cache: { read: 2, write: 0 } }, cost: 0.5 }))});
+emit(${JSON.stringify(event("step_start"))});
+emit({ type: "text", timestamp: 2, sessionID: "ses_fixture", part: { type: "text", text: JSON.stringify(observed) } });
+emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5, input: 4, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.25 }))});`;
+
+  function opencodeOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "opencode", model: MODEL, effort: "max", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of INHERITED) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of INHERITED) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned config, the prompt on stdin and the reply from the last step", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "opencode",
+      model: MODEL,
+      effort: "max",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "ses_fixture",
+      usage: { inputTokens: 10, cachedInputTokens: 2, cacheCreationInputTokens: 0, outputTokens: 4, reasoningTokens: 1, totalTokens: 15 },
+      costUsd: 0.75,
+      preflight: { status: "passed", evidence: `model ${MODEL} listed` },
+    });
+    const args = ["run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", MODEL, "--variant", "max"];
+    expect(saved.argv.slice(1)).toEqual(args);
+    expect(saved.preflight.argv.slice(1)).toEqual(["models", "opencode"]);
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      args,
+      prompt: "Return the marker.",
+      xdg: true,
+      modes: ["700", "600"],
+      permission: "deny",
+      opencode: [
+        "OPENCODE_CONFIG",
+        "OPENCODE_DISABLE_AUTOUPDATE",
+        "OPENCODE_DISABLE_CLAUDE_CODE",
+        "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_TEST_HOME",
+      ],
+    });
+  });
+
+  it("runs the preflight and the model with one config, environment and cwd", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-one-context");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("preflight\nmodel\n");
+    const contexts = readFileSync(join(bin, "opencode.contexts"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(contexts).toHaveLength(2);
+    expect(JSON.parse(contexts[0].config).permission["*"]).toBe("deny");
+    expect(contexts[1]).toEqual(contexts[0]);
+  });
+
+  for (const [name, model, models, status, exitCode] of [
+    ["a provider with no login", "openrouter/deepseek/deepseek-v4-pro", `console.error("\\u001b[91m\\u001b[1mError: \\u001b[0mProvider not found: openrouter"); process.exit(1);`, "unauthenticated", 77],
+    ["an unlisted model", "opencode/deepseek-v4.1-flash", LIST, "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "opencode-model.started");
+      fakeOpencode(models, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = opencodeOptions(`opencode-preflight-${exitCode}`, { model, effort: "default" });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" }, error: { message: "authentication or model preflight failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies a rejected tool call, an error event and SIGTERM from the captured shapes", async () => {
+    fakeOpencode(LIST, `console.error("! permission requested: edit (created.txt); auto-rejecting");
+emit(${JSON.stringify(event("step_start"))});
+emit(${JSON.stringify(event("step_finish", { reason: "tool-calls" }))});`);
+    const rejected = opencodeOptions("opencode-rejected");
+    const rejectedResult = await runLane(laneOf(rejected));
+    expect(rejectedResult.exitCode).toBe(70);
+    expect(rejectedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, error: { message: "opencode ended on a rejected tool call" } });
+    expect(rejectedResult.receipt.error?.evidence).toContain("auto-rejecting");
+    expect(existsSync(rejected.outputPath)).toBe(false);
+
+    fakeOpencode(LIST, `console.error('level=ERROR message=failed error="ProviderModelNotFoundError: Model not found"');
+emit({ type: "error", timestamp: 1, sessionID: "ses_fixture", error: { name: "UnknownError", data: { message: "Unexpected server error. Check server logs for details." } } });
+process.exit(1);`);
+    const failed = opencodeOptions("opencode-error");
+    const failedResult = await runLane(laneOf(failed));
+    expect(failedResult.exitCode).toBe(70);
+    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 1, error: { message: "opencode reported UnknownError: Unexpected server error. Check server logs for details." } });
+    expect(failedResult.receipt.error?.evidence).toContain("ProviderModelNotFoundError");
+
+    fakeOpencode(LIST, `emit(${JSON.stringify(event("step_start"))});
+process.kill(process.pid, "SIGTERM");
+await Bun.sleep(5_000);`);
+    const terminated = opencodeOptions("opencode-sigterm");
+    const terminatedResult = await runLane(laneOf(terminated));
+    expect(terminatedResult.exitCode).toBe(130);
+    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
+    expect(existsSync(terminated.outputPath)).toBe(false);
+  });
+
+  it("runs in a repository holding .opencode/ and an opencode.json, which the environment turns off", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".opencode", "plugins"), { recursive: true });
+    mkdirSync(nested);
+    writeFileSync(join(repo, "opencode.json"), "{\"permission\":{\"bash\":\"allow\"}}\n");
+    const input = opencodeOptions("opencode-project-config", { cwd: nested });
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    expect(result.receipt).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8")).permission).toBe("deny");
+  });
+
+  it("refuses an isolated-write OpenCode lane before launch", () => {
+    const input = opencodeOptions("opencode-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider opencode does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("dsh lanes", () => {
+  const DSH_VARIABLES = ["DSH_PERMISSION_MODE", "DSH_HOME", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"];
+  const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
+  const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
+
+  // A dsh stand-in: `--version` prints `version`; the preflight (a positional `preflight` task) prints
+  // `status`; the model call reads stdin and runs `turn`, which sees `args`, `patch`, `prompt` and `emit`.
+  // Each call appends its kind to `dsh.calls` next to the stand-in. The child environment keeps no test
+  // variable, so each case bakes its own.
+  function fakeDsh(status: string, turn: string, version = "0.2.0-rc.2"): void {
+    writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const call = (kind) => appendFileSync(join(dirname(process.argv[1]), "dsh.calls"), kind + "\\n");
+if (args[0] === "--version") {
+  call("version");
+  console.log(${JSON.stringify(version)});
+  process.exit(0);
+}
+const patch = args[args.indexOf("--patch") + 1];
+const emit = (event) => console.log(JSON.stringify(event));
+if (args.at(-1) === "preflight") {
+  call("preflight");
+  console.log(${JSON.stringify(status)});
+  process.exit(1);
+}
+call("model");
+const prompt = await Bun.stdin.text();
+emit({ type: "session", sessionId: "session-fixture", cwd: process.cwd() });
+${turn}
+`);
+    chmodSync(join(bin, "dsh"), 0o755);
+  }
+
+  // Reports what the child saw as the final text.
+  const OBSERVE = `const observed = {
+  prompt,
+  patch: [["- id: sandbox-policy", 4], ["- id: credentials", 3], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
+    const lines = readFileSync(patch, "utf8").split("\\n");
+    return lines.slice(lines.indexOf(row), lines.indexOf(row) + count);
+  }),
+  home: process.env.DSH_HOME,
+  dirMode: (statSync(dirname(patch)).mode & 0o777).toString(8),
+  patchMode: (statSync(patch).mode & 0o777).toString(8),
+  variables: Object.keys(process.env).filter((key) => /^(DSH_|DEEPSEEK_)/.test(key)).sort(),
+};
+emit({ type: "status", phase: "step_end", turn: 1, step: 1, usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3, totalTokens: 10 } });
+emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "completed" } });
+emit({ type: "final", text: JSON.stringify(observed) });`;
+
+  function dshOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "dsh", model: "deepseek-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DSH_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DSH_VARIABLES) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned patch, the prompt on stdin and the pinned-argv proof", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "dsh",
+      model: "deepseek-flash",
+      effort: "high",
+      mode: "read-only",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "session-fixture",
+      usage: { inputTokens: 5, outputTokens: 2, cachedInputTokens: 3, totalTokens: 10 },
+      preflight: { status: "passed", evidence: "credential present; not validated" },
+    });
+    const dir = `${input.receiptPath}.provider`;
+    expect(saved.argv.slice(1)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml"), "--json", "-"]);
+    expect(saved.preflight.argv.slice(1, 5)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml")]);
+    expect(saved.preflight.argv.at(-1)).toBe("preflight");
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      prompt: "Return the marker.",
+      patch: [
+        "- id: sandbox-policy",
+        "  config:",
+        "    mode: read-only",
+        `    workspaceRoot: ${JSON.stringify(scratch)}`,
+        "- id: credentials",
+        "  config:",
+        `    path: ${JSON.stringify(join(resolve("DSH_HOME-value"), ".credentials.yaml"))}`,
+        "- id: agent-default-model",
+        "  config:",
+        "    provider: deepseek-official",
+        "    model: \"deepseek-flash\"",
+        "    reasoningEffort: \"high\"",
+      ],
+      dirMode: "700",
+      patchMode: "600",
+      home: dir,
+      variables: ["DEEPSEEK_API_KEY", "DSH_HOME"],
+    });
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["a missing credential", MISSING, 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to dsh", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "dsh-model.started");
+      fakeDsh(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = dshOptions(`dsh-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("never completes SIGTERM's exit 0 with a partial final", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_start", turn: 1 });
+emit({ type: "final", text: "partial reply" });`);
+    const input = dshOptions("dsh-sigterm-shape");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(65);
+    expect(result.receipt).toMatchObject({ status: "malformed-output", exitCode: 0, error: { message: "dsh ended without a completed turn" } });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("classifies a turn error, an unknown model and exit 130 from the captured shapes", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "rate limited", code: "RATE_LIMIT" } } });
+emit({ type: "final", text: "" });
+console.error("dsh: RATE_LIMIT: rate limited");
+process.exit(1);`);
+    const failed = dshOptions("dsh-turn-error");
+    expect((await runLane(laneOf(failed))).receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 1,
+      sessionId: "session-fixture",
+      error: { message: "dsh turn failed: RATE_LIMIT: rate limited" },
+    });
+
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.", code: "INVALID_REQUEST", status: 400 } } });
+console.error("dsh: INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.");
+process.exit(1);`);
+    const unknown = dshOptions("dsh-unknown-model", { model: "deepseek-next" });
+    const unknownResult = await runLane(laneOf(unknown));
+    expect(unknownResult.exitCode).toBe(69);
+    expect(unknownResult.receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDsh(TRANSPORT, `emit({ type: "final", text: "partial reply" });
+process.exit(130);`);
+    const interrupted = dshOptions("dsh-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "cancelled", exitCode: 130, signal: null });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("refuses a dsh other than the measured version before the preflight", async () => {
+    fakeDsh(TRANSPORT, OBSERVE, "0.3.0");
+    const input = dshOptions("dsh-version");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(69);
+    expect(result.receipt).toMatchObject({
+      status: "unavailable-cli",
+      preflight: { status: "not-run" },
+      error: {
+        message: "dsh 0.3.0 is not the measured 0.2.0-rc.2; the adapter must be re-measured before it runs this version",
+        evidence: "0.3.0",
+      },
+    });
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\n");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("checks the measured version, then runs the preflight and the model", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-version-match");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\npreflight\nmodel\n");
+  });
+
+  it("runs a dsh lane whose cwd holds .env", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const cwd = join(scratch, "env-repo");
+    fs.mkdirSync(join(cwd, ".git"), { recursive: true });
+    writeFileSync(join(cwd, ".env"), "PSTACK_FIXTURE=1\n");
+    const input = dshOptions("dsh-cwd-env", { cwd });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
+  it("refuses an isolated-write dsh lane before launch", () => {
+    const input = dshOptions("dsh-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider dsh does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("amp lanes", () => {
+  const SIGNED_IN = "Signed in as <EMAIL>\n**Individual credits:** $<CREDITS> remaining";
+  const MISSING_KEY = "Error: Invalid or missing API key. Run 'amp login' to authenticate.";
+  const AMP_VARIABLES = ["AMP_API_KEY", "AMP_SETTINGS_FILE", "AMP_EXECUTOR", "AMP_INITIAL_AGENT_MODE_KEY", "AMP_URL"];
+
+  // An Amp stand-in: `usage` exits `usageExit` and prints `usage` (to stderr when it fails); the model call runs
+  // `turn`, which sees `args`, `at`, `settings` and the stdin `prompt`. The child environment keeps no test
+  // variable, so each case bakes its own.
+  function fakeAmp(usage: string, turn: string, usageExit = 0): void {
+    writeFileSync(join(bin, "amp"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "usage") {
+  (${usageExit} === 0 ? console.log : console.error)(${JSON.stringify(usage)});
+  process.exit(${usageExit});
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const settings = at("--settings-file");
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "T-fixture" }));
+${turn}
+`);
+    chmodSync(join(bin, "amp"), 0o755);
+  }
+
+  // Reports what the child saw as the result text.
+  const OBSERVE = `const observed = {
+  prompt,
+  mode: at("-m"),
+  dirMode: (statSync(dirname(settings)).mode & 0o777).toString(8),
+  settingsMode: (statSync(settings).mode & 0o777).toString(8),
+  tools: JSON.parse(readFileSync(settings, "utf8"))["amp.tools.enable"],
+  ampVariables: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("AMP_"))),
+};
+emit({ type: "system", subtype: "init", tools: ["Read"], agent_mode: "medium" });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 3, cache_read_input_tokens: 4, output_tokens: 1 } } });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "y" }], usage: { input_tokens: 2, output_tokens: 5 } } });
+emit({ type: "result", subtype: "success", is_error: false, num_turns: 2, result: JSON.stringify(observed) });`;
+
+  function ampOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "amp", model: "deepseek-v4.1-flash", effort: "default", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of AMP_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of AMP_VARIABLES) delete process.env[name];
+  });
+
+  for (const parent of ["claude", "codex"] as const) {
+    it(`runs amp:deepseek-v4.1-flash from a ${parent} parent with the pinned mode, lockdown settings and prompt on stdin`, async () => {
+      fakeAmp(SIGNED_IN, OBSERVE);
+      const input = ampOptions(`amp-${parent}`, { parent });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        parent,
+        provider: "amp",
+        model: "deepseek-v4.1-flash",
+        effort: "default",
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "T-fixture",
+        usage: { inputTokens: 5, cachedInputTokens: 4, outputTokens: 6 },
+        costUsd: null,
+        preflight: { status: "passed", evidence: "authenticated" },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "-x", "--stream-json", "-m", "deepseek-v4.1-flash", "--settings-file", join(dir, "settings.json"),
+        "--visibility", "private", "--no-ide", "--no-notifications", "-l", "pstack-runner",
+      ]);
+      expect(saved.preflight.argv.slice(1)).toEqual(["usage"]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        prompt: "Return the marker.",
+        mode: "deepseek-v4.1-flash",
+        dirMode: "700",
+        settingsMode: "600",
+        tools: ["Read"],
+        ampVariables: { AMP_API_KEY: "AMP_API_KEY-value", AMP_IGNORE_GUIDANCE_FILES: "*" },
+      });
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+  }
+
+  for (const [name, usage, usageExit, exitCode, message] of [
+    ["a missing key", MISSING_KEY, 1, 77, "authentication or model preflight failed"],
+    ["a login prompt", "Would you like to log in to Amp? [(y)es, (n)o]", 0, 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "amp-model.started");
+      fakeAmp(usage, `writeFileSync(${JSON.stringify(started)}, "started");`, usageExit);
+      const input = ampOptions(`amp-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("reads exit-0 error and cancellation results, and an unknown mode's exit 1, as failures", async () => {
+    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "Claude Usage is set to Subscription Only." });`);
+    const subscription = ampOptions("amp-subscription");
+    const subscriptionResult = await runLane(laneOf(subscription));
+    expect(subscriptionResult.exitCode).toBe(70);
+    expect(subscriptionResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "T-fixture",
+      error: { message: "Claude Usage is set to Subscription Only." },
+    });
+    expect(existsSync(subscription.outputPath)).toBe(false);
+
+    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "User cancelled (SIGINT/SIGTERM)" });`);
+    const cancelled = ampOptions("amp-cancelled");
+    const cancelledResult = await runLane(laneOf(cancelled));
+    expect(cancelledResult.exitCode).toBe(130);
+    expect(cancelledResult.receipt).toMatchObject({ status: "cancelled", exitCode: 0, signal: null });
+    expect(existsSync(cancelled.outputPath)).toBe(false);
+
+    fakeAmp(SIGNED_IN, `console.error("Error: Unexpected error inside Amp CLI. Run with AMP_DEBUG=1 to see detailed logs.");
+process.exit(1);`);
+    const unknown = ampOptions("amp-unknown-mode", { model: "nonexistent-mode-xyz" });
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+  });
+
+  it("runs an Amp lane whose workspace holds .amp", async () => {
+    fakeAmp(SIGNED_IN, OBSERVE);
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    fs.mkdirSync(join(repo, ".amp/plugins"), { recursive: true });
+    fs.writeFileSync(join(repo, ".amp/settings.json"), "{}\n");
+    fs.mkdirSync(nested);
+    const input = ampOptions("amp-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+  });
+
+  it("refuses an isolated-write Amp lane before launch", () => {
+    const input = ampOptions("amp-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider amp does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+
+describe("agy lanes", () => {
+  const MODELS = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n";
+  const SIGN_IN = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.";
+
+  // An agy stand-in: `models` prints `models` to stdout, or `signIn` to stderr with exit 1; the model call runs
+  // `turn`, which sees `args`, `at`, `stdin` and `result(body)`. The child environment keeps no test variable.
+  function fakeAgy(turn: string, models = MODELS, signIn = false): void {
+    writeFileSync(join(bin, "agy"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${signIn}) {
+    console.error(${JSON.stringify(SIGN_IN)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const stdin = await Bun.stdin.text();
+const result = (body) => console.log(JSON.stringify({ event: "result", result: { conversation_id: "a1", status: "SUCCESS", response: "", usage: { input_tokens: 5, output_tokens: 2, thinking_tokens: 1, cache_read_tokens: 0, total_tokens: 7 }, ...body } }));
+${turn}
+`);
+    chmodSync(join(bin, "agy"), 0o755);
+  }
+
+  // Reports what the child saw: the agent file in --add-dir, its modes, the stdin line and the environment.
+  const OBSERVE = `const agent = join(at("--add-dir"), ".agents/agents", at("--agent") + ".md");
+if (!existsSync(agent)) {
+  console.error('error: unknown agent "' + at("--agent") + '"');
+  process.exit(1);
+}
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+const observed = {
+  model: at("--model"),
+  stdin: JSON.parse(stdin),
+  stdinLines: stdin.split("\\n").length - 1,
+  tools: readFileSync(agent, "utf8").split("tools:\\n")[1].split("\\n")[0],
+  modes: [mode(at("--add-dir")), mode(agent)],
+  geminiVariables: Object.keys(process.env).filter((key) => key.startsWith("GEMINI_")),
+};
+console.log(JSON.stringify({ event: "init", init: { model: at("--model") } }));
+result({ response: JSON.stringify(observed) + "\\n" });`;
+
+  function agyOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "agy", model: "gemini-3.8-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "GEMINI_API_KEY-value";
+  });
+  afterEach(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  for (const effort of ["low", "medium", "high"] as const) {
+    it(`runs agy:gemini-3.8-flash@${effort} with the envelope on stdin and the run-owned agent, on pinned argv`, async () => {
+      fakeAgy(OBSERVE);
+      const input = agyOptions(`agy-${effort}`, { effort });
+      writeFileSync(input.promptPath, "Read \"marker.txt\".\nReply with its contents.\n");
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      const cliModel = `gemini-3.8-flash-${effort}`;
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "agy",
+        model: "gemini-3.8-flash",
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "a1",
+        usage: { inputTokens: 5, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 1, totalTokens: 7 },
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "--input-format", "stream-json", "--output-format", "stream-json", "--model", cliModel,
+        "--add-dir", dir, "--agent", "pstack-read-only",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        stdin: { event: "user", message: { role: "user", content: "Read \"marker.txt\".\nReply with its contents.\n" } },
+        stdinLines: 1,
+        tools: "  - view_file",
+        modes: ["700", "600"],
+        geminiVariables: [],
+      });
+    });
+  }
+
+  for (const [name, signIn, models, status, exitCode] of [
+    ["a sign-in failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted variant", false, "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n", "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "agy-model.started");
+      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`, models, signIn);
+      const input = agyOptions(`agy-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an exit-0 denial, an unknown model, an interruption and a missing agent from the captured shapes", async () => {
+    fakeAgy(`console.error('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.');
+result({ denied_actions: [{ action: "command", display_name: "RunCommand" }] });`);
+    const denied = agyOptions("agy-denied");
+    const deniedResult = await runLane(laneOf(denied));
+    expect(deniedResult.exitCode).toBe(70);
+    expect(deniedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "a1",
+      error: { message: "agy denied a tool that needed approval" },
+    });
+    expect(deniedResult.receipt.error?.evidence).toContain("auto-denied");
+    expect(existsSync(denied.outputPath)).toBe(false);
+
+    fakeAgy(`console.error('error: invalid model selection (--model "' + at("--model") + '" --effort ""): model is not recognized as a known model');
+result({ conversation_id: "", status: "ERROR", error: 'invalid model selection (--model "' + at("--model") + '")' });
+process.exit(1);`);
+    const unknown = agyOptions("agy-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1, sessionId: null });
+
+    fakeAgy(`console.error("error: interrupted");
+result({ status: "ERROR", error: "interrupted" });
+process.exit(1);`);
+    const interrupted = agyOptions("agy-interrupted");
+    const interruptedResult = await runLane(laneOf(interrupted));
+    expect(interruptedResult.exitCode).toBe(130);
+    expect(interruptedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 1, error: { message: "agy reported the turn was interrupted" } });
+
+    // The stand-in fails closed like agy when the run-owned agent file is gone.
+    fakeAgy(`import { rmSync } from "node:fs";
+rmSync(join(at("--add-dir"), ".agents"), { recursive: true });
+${OBSERVE}`);
+    const missing = agyOptions("agy-missing-agent");
+    expect((await runLane(laneOf(missing))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+    expect(existsSync(missing.outputPath)).toBe(false);
+  });
+
+  it("runs an agy lane in a repository that holds .agents/", async () => {
+    fakeAgy(OBSERVE);
+    const repo = join(scratch, "repo");
+    fs.mkdirSync(join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(join(repo, ".agents"));
+    const input = agyOptions("agy-repo-config", { cwd: repo });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
+  it("refuses an isolated-write agy lane before launch", () => {
+    const input = agyOptions("agy-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider agy does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("cursor lanes", () => {
+  const MODELS = "Available models\n\nauto - Auto (current, default)\ncomposer-2.5 - Composer 2.5\ngemini-3.7-flash-high - Gemini 3.7 Flash\n";
+  const AUTH_REQUIRED = "Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.";
+  const CURSOR_VARIABLES = ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT", "CURSOR_SANDBOX_POLICY_DIR", "CURSOR_CONFIG_DIR"];
+
+  // A cursor-agent stand-in: `models` prints `models` to stdout, or the authentication error to stderr with exit 1;
+  // the model call runs `turn`, which sees `args`, `at`, the stdin `prompt` and `emit(event)`. The child environment
+  // keeps no test variable, so each case bakes its own.
+  function fakeCursor(turn: string, models = MODELS, loggedOut = false): void {
+    writeFileSync(join(bin, "cursor-agent"), `#!/usr/bin/env bun
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${loggedOut}) {
+    console.error(${JSON.stringify(AUTH_REQUIRED)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "c1" }));
+${turn}
+`);
+    chmodSync(join(bin, "cursor-agent"), 0o755);
+  }
+
+  // Reports what the child saw as the last assistant text, after an earlier segment the result joins.
+  const OBSERVE = `const dir = process.env.CURSOR_CONFIG_DIR;
+const config = join(dir, "cli-config.json");
+const observed = {
+  prompt,
+  model: at("--model"),
+  modes: [(statSync(dir).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
+  deny: JSON.parse(readFileSync(config, "utf8")).permissions.deny,
+  cursorVariables: Object.keys(process.env).filter((key) => key.startsWith("CURSOR_")).sort(),
+};
+emit({ type: "system", subtype: "init", model: "Composer 2.5" });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Reading the file.\\n" }] } });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(observed) }] } });
+emit({ type: "result", subtype: "success", is_error: false, result: "Reading the file.\\n" + JSON.stringify(observed), usage: { inputTokens: 6, outputTokens: 2, cacheReadTokens: 4, cacheWriteTokens: 3 } });`;
+
+  function cursorOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "cursor", model: "composer-2.5", effort: "default", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of CURSOR_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of CURSOR_VARIABLES) delete process.env[name];
+  });
+
+  for (const [parent, model, effort, cliModel] of [
+    ["claude", "composer-2.5", "default", "composer-2.5"],
+    ["codex", "gemini-3.7-flash", "high", "gemini-3.7-flash-high"],
+  ] as const) {
+    it(`runs cursor:${model}@${effort} from a ${parent} parent in the run-owned config directory, on pinned argv`, async () => {
+      fakeCursor(OBSERVE);
+      const input = cursorOptions(`cursor-${parent}`, { parent, model, effort });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        parent,
+        provider: "cursor",
+        model,
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "c1",
+        usage: { inputTokens: 6, cachedInputTokens: 4, cacheCreationInputTokens: 3, outputTokens: 2 },
+        costUsd: null,
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      expect(saved.argv.slice(1)).toEqual([
+        "-p", "--output-format", "stream-json", "--model", cliModel, "--mode", "ask", "--sandbox", "enabled", "--trust",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        prompt: "Return the marker.",
+        model: cliModel,
+        modes: ["700", "600"],
+        deny: ["Write(**)", "Shell(*)", "Mcp(*:*)"],
+        cursorVariables: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_CONFIG_DIR"],
+      });
+    });
+  }
+
+  it("points CURSOR_CONFIG_DIR at the lane's provider directory, replacing an inherited value", async () => {
+    fakeCursor(`emit({ type: "assistant", message: { content: [{ type: "text", text: process.env.CURSOR_CONFIG_DIR }] } });
+emit({ type: "result", subtype: "success", is_error: false });`);
+    const input = cursorOptions("cursor-config-dir");
+    await runLane(laneOf(input));
+    expect(readFileSync(input.outputPath, "utf8")).toBe(`${input.receiptPath}.provider`);
+  });
+
+  for (const [name, loggedOut, models, status, exitCode] of [
+    ["an authentication failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted model", false, "Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\n", "unavailable-model", 69],
+    ["empty model-list output", false, "", "child-failed", 70],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "cursor-model.started");
+      fakeCursor(`writeFileSync(${JSON.stringify(started)}, "started");`, models, loggedOut);
+      const input = cursorOptions(`cursor-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("reads an exit-0 error result, an unknown model and a signal exit as failures", async () => {
+    fakeCursor(`emit({ type: "result", subtype: "error", is_error: true, result: "Usage limit reached." });`);
+    const failed = cursorOptions("cursor-error-result");
+    const failedResult = await runLane(laneOf(failed));
+    expect(failedResult.exitCode).toBe(70);
+    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, sessionId: "c1", error: { message: "Usage limit reached." } });
+    expect(existsSync(failed.outputPath)).toBe(false);
+
+    fakeCursor(`console.error("Cannot use this model: " + at("--model") + ". Available models: auto, composer-2.5");
+process.exit(1);`, `${MODELS}claude-opus-9-9-max - Listed, then refused by the turn\n`);
+    const unknown = cursorOptions("cursor-unknown-model", { model: "claude-opus-9-9-max" });
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeCursor(`emit({ type: "system", subtype: "init", model: "Composer 2.5" });
+console.error("\\nAborting operation...");
+process.exit(130);`);
+    const interrupted = cursorOptions("cursor-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "child-failed", exitCode: 130 });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("runs a Cursor lane in a workspace holding .cursor/ and .claude settings files", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".cursor"), { recursive: true });
+    mkdirSync(join(repo, ".claude"));
+    writeFileSync(join(repo, ".claude/settings.json"), "{}");
+    writeFileSync(join(repo, ".claude/settings.local.json"), "{}");
+    mkdirSync(nested);
+    fakeCursor(OBSERVE);
+    const input = cursorOptions("cursor-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+  });
+
+  it("refuses an isolated-write Cursor lane before launch", () => {
+    const input = cursorOptions("cursor-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider cursor does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
   });
 });

@@ -5,28 +5,25 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
-import { cursorModel } from "./cursor-models.ts";
-import { versionedClaudeAlias } from "./model-aliases.ts";
-import { codexFailureMessage, parseProviderOutput, ProviderResultError, reportedModelMatches } from "./parse-output.ts";
-import type {
-  AccessMode,
-  ParsedOutput,
-  Provider,
-  ReceiptStatus,
-  RunnerOptions,
-  RunnerReceipt,
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
+import type { StreamFailure } from "./registry/contract.ts";
+import {
+  ERROR_EVIDENCE_LIMIT,
+  evidence,
+  modelFailureStatus,
+  PARENTS,
+  type ReceiptStatus,
+  type RunnerReceipt,
+  UsageError,
 } from "./types.ts";
-import { UnavailableModelError, UsageError } from "./types.ts";
 
-const ERROR_EVIDENCE_LIMIT = 4_000;
-const GROK_PREFLIGHT_RETRY_DELAY_MS = 5_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 interface ProcessResult {
@@ -36,7 +33,7 @@ interface ProcessResult {
   readonly stderr: string;
   readonly timedOut: boolean;
   readonly cancelledBy: CancellationSignal | null;
-  readonly watcherStopped: boolean;
+  readonly streamFailure: StreamFailure | null;
 }
 
 type CancellationSignal = "SIGINT" | "SIGTERM";
@@ -52,10 +49,6 @@ type RetryWaitResult = "ready" | "cancelled" | "timed-out";
 export interface RunResult {
   readonly exitCode: number;
   readonly receipt: RunnerReceipt;
-}
-
-function evidence(value: string): string {
-  return value.trim().slice(0, ERROR_EVIDENCE_LIMIT);
 }
 
 // A provider's terminal event ends its stream, so malformed output keeps the tail.
@@ -82,15 +75,37 @@ function modelStreamPaths(receiptPath: string): { stdoutPath: string; stderrPath
   return { stdoutPath: `${receiptPath}.stdout`, stderrPath: `${receiptPath}.stderr` };
 }
 
-function reserveOutputs(options: RunnerOptions): ModelStreams {
-  const { stdoutPath, stderrPath } = modelStreamPaths(options.receiptPath);
-  const paths = [options.outputPath, options.receiptPath, stdoutPath, stderrPath];
+interface ReservedSidecar {
+  readonly facts: NonNullable<LaunchFacts["providerSidecar"]>;
+  readonly configContent: string | null;
+}
+
+// The provider sidecar directory sits next to the receipt, like the stream files.
+function providerSidecar(lane: Lane): ReservedSidecar | null {
+  const declared = lane.adapter.launch.sidecar;
+  if (declared === null) return null;
+  const directory = `${lane.receiptPath}.provider`;
+  return {
+    facts: {
+      directory,
+      output: declared.output === null ? null : join(directory, declared.output),
+      config: declared.config === null ? null : join(directory, declared.config.name),
+    },
+    configContent: declared.config?.content(lane) ?? null,
+  };
+}
+
+function reserveOutputs(lane: Lane): ModelStreams {
+  const { stdoutPath, stderrPath } = modelStreamPaths(lane.receiptPath);
+  const sidecar = providerSidecar(lane);
+  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.facts.directory])];
   const resolved = paths.map((path) => resolve(path));
-  if (new Set(resolved).size !== paths.length || resolved.includes(resolve(options.promptPath))) {
+  if (new Set(resolved).size !== paths.length || resolved.includes(resolve(lane.promptPath))) {
     throw new UsageError("prompt, output, receipt, and stream paths must be distinct");
   }
   const created: string[] = [];
   let stdout: number | null = null;
+  let stderr: number | null = null;
   try {
     for (const path of paths.slice(0, 2)) {
       reserve(path);
@@ -98,13 +113,28 @@ function reserveOutputs(options: RunnerOptions): ModelStreams {
     }
     stdout = openSync(stdoutPath, "wx", 0o600);
     created.push(stdoutPath);
-    const stderr = openSync(stderrPath, "wx", 0o600);
+    stderr = openSync(stderrPath, "wx", 0o600);
+    created.push(stderrPath);
+    if (sidecar !== null) {
+      // Not recursive, so an existing directory refuses the lane like any other reserved path.
+      mkdirSync(sidecar.facts.directory, { mode: 0o700 });
+      created.push(sidecar.facts.directory);
+      if (sidecar.facts.config !== null && sidecar.configContent !== null) {
+        mkdirSync(dirname(sidecar.facts.config), { recursive: true, mode: 0o700 });
+        writeFileSync(sidecar.facts.config, sidecar.configContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      }
+    }
     return { stdout, stderr };
   } catch (error) {
     if (stdout !== null) closeSync(stdout);
-    for (const path of created) removeIfExists(path);
+    if (stderr !== null) closeSync(stderr);
+    for (const path of created) rmSync(path, { recursive: true, force: true });
     throw error;
   }
+}
+
+function readIfPresent(path: string | null | undefined): string | null {
+  return path != null && existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 function writeReceipt(path: string, receipt: RunnerReceipt): void {
@@ -144,73 +174,21 @@ function installRunCancellation(): RunCancellation {
   };
 }
 
-const CODEX_IDENTITY = [
-  "CODEX_THREAD_ID",
-  "CODEX_SESSION_ID",
-  "CODEX_CI",
-  "CODEX_SHELL",
-  "CODEX_SANDBOX",
-  "CODEX_SANDBOX_NETWORK_DISABLED",
-  "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-] as const;
-
-const CLAUDE_IDENTITY = [
-  "CLAUDECODE",
-  "CLAUDE_CODE_CHILD_SESSION",
-  "CLAUDE_CODE_SESSION_ID",
-  "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
-] as const;
-
-const GROK_ENVIRONMENT = new Set([
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "TMPDIR",
-  "LANG",
-  "TERM",
-  "COLORTERM",
-  "TZ",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
-  "all_proxy",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-]);
-
-const GROK_ENVIRONMENT_PREFIXES = ["LC_", "XDG_", "GROK_", "XAI_"] as const;
-
-// A Grok lane's shell can read every variable it inherits in both access modes, so it gets
-// only what grok needs to start, authenticate and reach the network.
-// A Claude writer's git must find its repository from the cwd, as discovery's git did, so
-// an inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
+// The adapter's policy applies first, then its run-owned values; the parent's identity markers are
+// always dropped last, so the child cannot detect a nested harness.
 export function childEnvironment(
-  provider: Provider,
-  mode: AccessMode,
+  lane: Lane,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
-  if (provider === "grok") {
-    return Object.fromEntries(Object.entries(source).filter(([key]) =>
-      GROK_ENVIRONMENT.has(key) || GROK_ENVIRONMENT_PREFIXES.some((prefix) => key.startsWith(prefix))
-    ));
-  }
-  const result = { ...source };
-  const remove = provider === "claude"
-    ? CODEX_IDENTITY
-    : provider === "codex"
-      ? CLAUDE_IDENTITY
-      : [...CODEX_IDENTITY, ...CLAUDE_IDENTITY];
-  for (const key of remove) delete result[key];
-  if (provider === "claude" && mode === "isolated-write") {
-    for (const key of Object.keys(result)) if (key.startsWith("GIT_")) delete result[key];
-  }
+  const policy = lane.adapter.environment(lane.access, providerSidecar(lane)?.facts.directory ?? null);
+  const keep = policy.kind === "allowlist"
+    ? (key: string) => policy.names.includes(key) || policy.prefixes.some((prefix) => key.startsWith(prefix))
+    : (key: string) => !policy.dropPrefixes.some((prefix) => key.startsWith(prefix));
+  const result = {
+    ...Object.fromEntries(Object.entries(source).filter(([key]) => keep(key))),
+    ...(policy.kind === "allowlist" ? policy.set : undefined),
+  };
+  for (const key of PARENTS[lane.parent].identity) delete result[key];
   return result;
 }
 
@@ -243,8 +221,6 @@ interface StreamCapture {
   readonly result: Promise<string>;
   cancel(): Promise<void>;
 }
-
-type StdoutLineWatcher = (line: string) => boolean;
 
 function captureStream(
   stream: ReadableStream<Uint8Array>,
@@ -317,36 +293,38 @@ type ProcessEvent =
   | { readonly kind: "exited"; readonly exitCode: number }
   | { readonly kind: "cancelled"; readonly signal: CancellationSignal }
   | { readonly kind: "timed-out" }
-  | { readonly kind: "watcher-stopped" };
+  | { readonly kind: "stream-failed"; readonly failure: StreamFailure };
 
 async function runProcess(
   executable: string,
-  spec: CommandSpec,
+  args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
-  prompt: string,
+  prompt: string | null,
   deadlineAt: number | null,
   cancellation: RunCancellation,
   streamFiles?: ModelStreams,
-  stdoutLineWatcher?: StdoutLineWatcher
+  watchStdout?: (line: string) => StreamFailure | null
 ): Promise<ProcessResult> {
-  const child = Bun.spawn([executable, ...spec.args], {
+  const child = Bun.spawn([executable, ...args], {
     cwd,
     env,
-    stdin: spec.stdin === "prompt" ? "pipe" : "ignore",
+    stdin: prompt === null ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   let onStdoutLine: ((line: string) => void) | undefined;
-  const watched: Promise<ProcessEvent> | null = stdoutLineWatcher === undefined
+  const watched: Promise<ProcessEvent> | null = watchStdout === undefined
     ? null
     : new Promise((resolve) => {
       let stopped = false;
       onStdoutLine = (line) => {
-        if (!stopped && stdoutLineWatcher(line)) {
+        if (stopped) return;
+        const failure = watchStdout(line);
+        if (failure !== null) {
           stopped = true;
-          resolve({ kind: "watcher-stopped" });
+          resolve({ kind: "stream-failed", failure });
         }
       };
     });
@@ -375,7 +353,7 @@ async function runProcess(
       arm();
     });
   try {
-    if (spec.stdin === "prompt") {
+    if (prompt !== null) {
       const stdin = child.stdin;
       if (stdin === undefined) throw new Error("child stdin pipe was not created");
       stdin.write(prompt);
@@ -414,10 +392,10 @@ async function runProcess(
 
     const cancelledBy = cancellation.signal;
     const timedOut = cancelledBy === null && outcome.kind === "timed-out";
-    const watcherStopped = cancelledBy === null && outcome.kind === "watcher-stopped";
+    const streamFailure = cancelledBy === null && outcome.kind === "stream-failed" ? outcome.failure : null;
     if (cancelledBy !== null) {
       if (await terminate(child, cancelledBy)) signalSent = cancelledBy;
-    } else if (timedOut || watcherStopped) {
+    } else if (timedOut || streamFailure !== null) {
       if (await terminate(child)) signalSent = "SIGTERM";
     }
     if (captured === null) {
@@ -432,7 +410,7 @@ async function runProcess(
       stderr: captured[1],
       timedOut,
       cancelledBy,
-      watcherStopped,
+      streamFailure,
     };
   } catch (error) {
     await terminate(child, cancellation.signal ?? "SIGTERM");
@@ -444,7 +422,8 @@ async function runProcess(
   }
 }
 
-async function waitForGrokPreflightRetry(
+async function waitForPreflightRetry(
+  delayMs: number,
   deadlineAt: number | null,
   cancellation: RunCancellation
 ): Promise<RetryWaitResult> {
@@ -453,7 +432,7 @@ async function waitForGrokPreflightRetry(
   const now = Date.now();
   if (deadlineAt !== null && now >= deadlineAt) return "timed-out";
 
-  const retryAt = now + GROK_PREFLIGHT_RETRY_DELAY_MS;
+  const retryAt = now + delayMs;
   const wakeAt = deadlineAt === null ? retryAt : Math.min(retryAt, deadlineAt);
   const timerResult: RetryWaitResult = wakeAt < retryAt ? "timed-out" : "ready";
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -484,11 +463,7 @@ type SharedGitDiscovery =
   };
 
 // Older git has no --path-format, so a relative answer is resolved against the cwd.
-const GIT_COMMON_DIR: CommandSpec = {
-  command: "git",
-  args: ["rev-parse", "--git-common-dir"],
-  stdin: "none",
-};
+const GIT_COMMON_DIR = ["rev-parse", "--git-common-dir"] as const;
 
 function within(parent: string, child: string): boolean {
   const path = relative(parent, child);
@@ -518,7 +493,7 @@ export async function discoverSharedGitDir(
     exitCode: result?.exitCode ?? null,
     signal: result?.signal ?? null,
   });
-  const git = Bun.which(GIT_COMMON_DIR.command, { PATH: env.PATH, cwd });
+  const git = Bun.which("git", { PATH: env.PATH, cwd });
   if (git === null) {
     return refuse(
       "unavailable-cli",
@@ -531,7 +506,7 @@ export async function discoverSharedGitDir(
     GIT_COMMON_DIR,
     cwd,
     { ...env, LC_ALL: "C" },
-    "",
+    null,
     deadlineAt,
     cancellation
   );
@@ -589,137 +564,6 @@ export async function discoverSharedGitDir(
   return { kind: "found", sharedGitDir: shared };
 }
 
-// grok names its configured default above the list even when the account cannot use it,
-// so only the lines under the header count.
-function grokModelAvailable(value: string, model: string): boolean {
-  const lines = value.split("\n");
-  const header = lines.findIndex((line) => /^\s*Available models:/.test(line));
-  if (header < 0) return false;
-  const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const listed = new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`);
-  return lines.slice(header + 1).some((line) => listed.test(line));
-}
-
-// Cursor standard ids prefix their fast twins, so match the whole listed token.
-function preflightListsModel(
-  provider: Provider,
-  model: string,
-  listing: string
-): boolean {
-  if (provider !== "cursor") return grokModelAvailable(listing, model);
-  return listing
-    .split("\n")
-    .some((line) => line.trim().split(/\s+/)[0] === model);
-}
-
-function preflightPassed(provider: Provider, model: string, result: ProcessResult): boolean {
-  if (result.exitCode !== 0 || result.timedOut) return false;
-  const combined = `${result.stdout}\n${result.stderr}`;
-  switch (provider) {
-    case "claude": {
-      try {
-        const value: unknown = JSON.parse(result.stdout);
-        return (
-          value !== null &&
-          typeof value === "object" &&
-          (value as { loggedIn?: unknown }).loggedIn === true
-        );
-      } catch {
-        return false;
-      }
-    }
-    case "codex":
-      return /logged in/i.test(combined);
-    case "grok":
-      return unavailableStatus(combined) === "child-failed"
-        && /\blogged in\b|\bYou are using XAI_API_KEY\.|\bYou are authenticated via deployment key\./i
-          .test(combined)
-        && grokModelAvailable(combined, model);
-    case "cursor":
-      return preflightListsModel(provider, model, combined);
-  }
-}
-
-function successfulPreflightEvidence(provider: Provider, model: string): string {
-  return provider === "grok" || provider === "cursor"
-    ? `authenticated; model ${model} available`
-    : "authenticated";
-}
-
-// Only preflight output is read for authentication; a failed model call's output can quote
-// the child's own work.
-function unavailableStatus(value: string): ReceiptStatus {
-  if (/not logged in|not authenticated|unauthenticated|authentication|sign in|login required/i.test(value)) {
-    return "unauthenticated";
-  }
-  return modelFailureStatus(value);
-}
-
-// Codex's terminal failure event is the CLI's own report, never model text, so it can name a
-// login lost after the preflight.
-function codexTerminalStatus(message: string): ReceiptStatus {
-  return /401 Unauthorized/i.test(message) ? "unauthenticated" : unavailableStatus(message);
-}
-
-type ModelFailureStatus =
-  | "usage-limited"
-  | "rate-limited"
-  | "unavailable-model"
-  | "unavailable-network"
-  | "child-failed";
-
-const MODEL_FAILURE_PATTERNS: readonly (readonly [ModelFailureStatus, RegExp])[] = [
-  ["usage-limited", /hit your usage limit|usage limit reached|usage_limit_reached|out of credits|quota exceeded|insufficient_quota|spend cap|upgrade to Plus/i],
-  ["rate-limited", /\b429\b|too many requests|rate[ _]limit/i],
-  ["unavailable-model", /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model|unsupported value:.{0,40}not supported with.{0,40}model/i],
-  ["unavailable-network", /waiting for network|error sending request|connection refused|connection reset|dns error|failed to lookup address|network is unreachable/i],
-];
-
-function modelFailureStatus(value: string): ModelFailureStatus {
-  for (const [status, pattern] of MODEL_FAILURE_PATTERNS) {
-    if (pattern.test(value)) return status;
-  }
-  return "child-failed";
-}
-
-function codexNetworkWaitWatcher(): StdoutLineWatcher {
-  let hasProgress = false;
-  return (line) => {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(line);
-    } catch {
-      return false;
-    }
-    if (raw === null || typeof raw !== "object") return false;
-    const event = raw as Record<string, unknown>;
-    const item = event.item;
-    if (
-      event.type === "turn.completed" ||
-      ((event.type === "item.started" || event.type === "item.completed") &&
-        item !== null && typeof item === "object" &&
-        "type" in item && typeof item.type === "string" && item.type !== "error")
-    ) {
-      hasProgress = true;
-    }
-    return !hasProgress && event.type === "error" &&
-      typeof event.message === "string" && /waiting for network/i.test(event.message);
-  };
-}
-
-function preflightFailureStatus(
-  provider: Provider,
-  model: string,
-  value: string
-): ReceiptStatus {
-  const status = unavailableStatus(value);
-  if (status !== "child-failed") return status;
-  return (provider === "grok" || provider === "cursor") &&
-      !preflightListsModel(provider, model, value)
-    ? "unavailable-model"
-    : "unauthenticated";
-}
-
 function retriedPreflightEvidence(
   first: string,
   second: string,
@@ -741,41 +585,39 @@ function statusExitCode(status: ReceiptStatus): number {
       return 130;
     case "malformed-output":
       return 65;
-    case "unavailable-cli":
     case "usage-limited":
+    case "unavailable-cli":
     case "unavailable-model":
       return 69;
     case "unavailable-network":
       return 68;
+    case "rate-limited":
+      return 75;
     case "child-failed":
       return 70;
     case "unauthenticated":
       return 77;
-    case "rate-limited":
-      return 75;
     case "timed-out":
       return 124;
   }
 }
 
 function modelProof(
-  provider: Provider,
-  requested: string,
-  reported: string | null,
-  effort?: RunnerOptions["effort"]
+  lane: Lane,
+  reported: string | null
 ): {
   readonly reportedModel: string | null;
   readonly modelVerified: boolean;
   readonly modelEvidence: "provider-report" | "pinned-argv" | null;
 } {
-  if (reportedModelMatches(provider, requested, reported, effort)) {
+  if (reported !== null && lane.adapter.proof.matches(lane, reported)) {
     return {
       reportedModel: reported,
       modelVerified: true,
       modelEvidence: "provider-report",
     };
   }
-  if (provider === "codex" && reported === null) {
+  if (reported === null && lane.adapter.proof.report === "absent") {
     return {
       reportedModel: null,
       modelVerified: false,
@@ -790,54 +632,41 @@ function modelProof(
 }
 
 function completeReceipt(
-  options: RunnerOptions,
-  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
+  lane: Lane,
+  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "writerSandbox" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
 ): RunnerReceipt {
   return {
     schemaVersion: 1,
-    parent: options.parent,
-    provider: options.provider,
-    model: options.model,
-    effort: options.effort,
-    mode: options.mode,
-    cwd: options.cwd,
-    promptPath: options.promptPath,
-    outputPath: options.outputPath,
-    ...modelStreamPaths(options.receiptPath),
+    parent: lane.parent,
+    provider: lane.adapter.id,
+    model: lane.model,
+    effort: lane.effort,
+    mode: lane.access.mode,
+    writerSandbox: lane.access.mode === "read-only" ? null : lane.access.sandbox,
+    cwd: lane.cwd,
+    promptPath: lane.promptPath,
+    outputPath: lane.outputPath,
+    ...modelStreamPaths(lane.receiptPath),
     ...partial,
   };
 }
 
-export function validateOptions(options: RunnerOptions): void {
-  if (options.parent === options.provider) {
-    throw new UsageError(
-      `provider ${options.provider} is native to parent ${options.parent}; use the parent subagent primitive`
-    );
-  }
-  if (options.model.trim().length === 0) throw new UsageError("model must not be empty");
-  const staleAlias = options.provider === "claude"
-    ? versionedClaudeAlias(options.model)
-    : null;
-  if (staleAlias !== null) {
-    throw new UsageError(
-      `Claude model ${options.model} is a version pin; normalize it to ${staleAlias} before invoking the runner`
-    );
-  }
+function validateLane(lane: Lane): void {
   if (
-    options.timeoutMs !== null &&
-    (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)
+    lane.timeoutMs !== null &&
+    (!Number.isFinite(lane.timeoutMs) || lane.timeoutMs <= 0)
   ) {
     throw new UsageError("timeout must be greater than zero");
   }
-  if (!existsSync(options.promptPath) || !statSync(options.promptPath).isFile()) {
-    throw new UsageError(`prompt is not a file: ${options.promptPath}`);
+  if (!existsSync(lane.promptPath) || !statSync(lane.promptPath).isFile()) {
+    throw new UsageError(`prompt is not a file: ${lane.promptPath}`);
   }
-  if (!existsSync(options.cwd) || !statSync(options.cwd).isDirectory()) {
-    throw new UsageError(`cwd is not a directory: ${options.cwd}`);
+  if (!existsSync(lane.cwd) || !statSync(lane.cwd).isDirectory()) {
+    throw new UsageError(`cwd is not a directory: ${lane.cwd}`);
   }
   if (
-    options.promptPath === options.outputPath ||
-    options.promptPath === options.receiptPath
+    lane.promptPath === lane.outputPath ||
+    lane.promptPath === lane.receiptPath
   ) {
     throw new UsageError("prompt, output, and receipt paths must be distinct");
   }
@@ -850,29 +679,26 @@ interface LaneProgress {
 }
 
 async function executeLane(
-  options: RunnerOptions,
+  lane: Lane,
   cancellation: RunCancellation,
   started: number,
   deadlineAt: number | null,
-  invocation: CommandSpec,
-  preflight: CommandSpec,
+  launchArgs: readonly string[],
   progress: LaneProgress,
   streamFiles: ModelStreams
 ): Promise<RunResult> {
+  const { adapter } = lane;
   const startedAt = new Date(started).toISOString();
-  const preflightModel = options.provider === "cursor"
-    ? cursorModel(options.model, options.effort).id
-    : options.model;
-  const prompt = readFileSync(options.promptPath, "utf8");
-  const parentNetworkDisabled = options.parent === "codex"
+  const prompt = readFileSync(lane.promptPath, "utf8");
+  const parentNetworkDisabled = lane.parent === "codex"
     && process.env.CODEX_SANDBOX_NETWORK_DISABLED === "1";
-  const env = childEnvironment(options.provider, options.mode);
-  const executable = Bun.which(invocation.command, {
+  const env = childEnvironment(lane);
+  const executable = Bun.which(adapter.executable, {
     PATH: env.PATH,
-    cwd: options.cwd,
+    cwd: lane.cwd,
   });
   progress.executable = executable;
-  progress.argv = [executable ?? invocation.command, ...invocation.args];
+  progress.argv = [executable ?? adapter.executable, ...launchArgs];
 
   let preflightState = progress.preflight;
   let receipt: RunnerReceipt;
@@ -886,14 +712,14 @@ async function executeLane(
     const terminalPreflight = preflightState.status === "not-run"
       ? { ...preflightState, status }
       : preflightState;
-    receipt = completeReceipt(options, {
+    receipt = completeReceipt(lane, {
       status,
       startedAt,
       completedAt: new Date(completed).toISOString(),
       elapsedMs: completed - started,
       executable,
       preflight: terminalPreflight,
-      argv: [executable ?? invocation.command, ...invocation.args],
+      argv: [executable ?? adapter.executable, ...launchArgs],
       exitCode: null,
       signal: null,
       reportedModel: null,
@@ -909,8 +735,8 @@ async function executeLane(
         evidence: "",
       },
     });
-    removeIfExists(options.outputPath);
-    writeReceipt(options.receiptPath, receipt);
+    removeIfExists(lane.outputPath);
+    writeReceipt(lane.receiptPath, receipt);
     return { exitCode: statusExitCode(status), receipt };
   };
 
@@ -923,14 +749,14 @@ async function executeLane(
 
   if (executable === null) {
     const completed = Date.now();
-    receipt = completeReceipt(options, {
+    receipt = completeReceipt(lane, {
       status: "unavailable-cli",
       startedAt,
       completedAt: new Date(completed).toISOString(),
       elapsedMs: completed - started,
       executable: null,
       preflight: preflightState,
-      argv: [invocation.command, ...invocation.args],
+      argv: [adapter.executable, ...launchArgs],
       exitCode: null,
       signal: null,
       reportedModel: null,
@@ -940,20 +766,20 @@ async function executeLane(
       usage: null,
       costUsd: null,
       error: {
-        message: `${invocation.command} executable not found`,
+        message: `${adapter.executable} executable not found`,
         evidence: "",
       },
     });
-    removeIfExists(options.outputPath);
-    writeReceipt(options.receiptPath, receipt);
+    removeIfExists(lane.outputPath);
+    writeReceipt(lane.receiptPath, receipt);
     return { exitCode: statusExitCode(receipt.status), receipt };
   }
 
-  if (options.provider === "claude" && options.mode === "isolated-write") {
-    const discovery = await discoverSharedGitDir(options.cwd, env, deadlineAt, cancellation);
+  if (adapter.launch.needsSharedGitDir(lane.access)) {
+    const discovery = await discoverSharedGitDir(lane.cwd, env, deadlineAt, cancellation);
     if (discovery.kind === "refused") {
       const completed = Date.now();
-      receipt = completeReceipt(options, {
+      receipt = completeReceipt(lane, {
         status: discovery.status,
         startedAt,
         completedAt: new Date(completed).toISOString(),
@@ -962,7 +788,7 @@ async function executeLane(
         preflight: discovery.status === "cancelled" || discovery.status === "timed-out"
           ? { ...preflightState, status: discovery.status }
           : preflightState,
-        argv: [executable, ...invocation.args],
+        argv: [executable, ...launchArgs],
         exitCode: discovery.exitCode,
         signal: discovery.signal,
         reportedModel: null,
@@ -973,46 +799,79 @@ async function executeLane(
         costUsd: null,
         error: { message: discovery.message, evidence: discovery.evidence },
       });
-      removeIfExists(options.outputPath);
-      writeReceipt(options.receiptPath, receipt);
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
       return { exitCode: statusExitCode(discovery.status), receipt };
     }
-    invocation = invocationCommand(options, discovery.sharedGitDir);
-    progress.argv = [executable, ...invocation.args];
+    const facts: LaunchFacts = { sharedGitDir: discovery.sharedGitDir, providerSidecar: providerSidecar(lane)?.facts ?? null };
+    launchArgs = adapter.launch.argv(lane, facts);
+    progress.argv = [executable, ...launchArgs];
   }
 
-  const preflightExecutable = executable;
-  let preflightResult = await runProcess(
-    preflightExecutable,
-    preflight,
-    options.cwd,
-    env,
-    "",
-    deadlineAt,
-    cancellation
-  );
-  let rawPreflightEvidence = evidence(`${preflightResult.stdout}\n${preflightResult.stderr}`);
-  let passed = preflightPassed(options.provider, preflightModel, preflightResult);
-  let preflightEvidence = passed
-    ? successfulPreflightEvidence(options.provider, preflightModel)
-    : rawPreflightEvidence;
+  const preflight = adapter.preflight;
+  if (preflight.guard !== undefined) {
+    const run = await runProcess(executable, preflight.guard.argv, lane.cwd, env, null, deadlineAt, cancellation);
+    if (run.cancelledBy !== null) return finishWithoutChild("cancelled", "during the pre-launch guard");
+    if (run.timedOut) return finishWithoutChild("timed-out", "during the pre-launch guard");
+    const refusal = preflight.guard.check(run);
+    if (refusal !== null) {
+      const completed = Date.now();
+      receipt = completeReceipt(lane, {
+        status: refusal.status,
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        executable,
+        preflight: preflightState,
+        argv: [executable, ...launchArgs],
+        exitCode: run.exitCode,
+        signal: run.signal,
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: null,
+        sessionId: null,
+        usage: null,
+        costUsd: null,
+        error: {
+          message: refusal.message,
+          evidence: evidence(`${run.stdout}\n${run.stderr}`),
+        },
+      });
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
+      return { exitCode: statusExitCode(receipt.status), receipt };
+    }
+  }
+  const preflightArgs = preflight.argv(lane, providerSidecar(lane)?.facts ?? null);
+  const runPreflight = async () => {
+    const run = await runProcess(executable, preflightArgs, lane.cwd, env, null, deadlineAt, cancellation);
+    const verdict = preflight.classify(run, lane);
+    const passed = !run.timedOut && verdict.kind === "passed";
+    const raw = evidence(`${run.stdout}\n${run.stderr}`);
+    return { run, verdict, passed, raw, shown: verdict.kind === "passed" && passed ? verdict.evidence : raw };
+  };
+  let attempt = await runPreflight();
+  let preflightEvidence = attempt.shown;
 
+  // The only retry an adapter can request is one more preflight after an "unauthenticated" verdict.
   if (
-    options.provider === "grok" &&
-    !passed &&
-    preflightResult.cancelledBy === null &&
-    !preflightResult.timedOut &&
-    preflightFailureStatus(options.provider, preflightModel, rawPreflightEvidence) ===
-      "unauthenticated"
+    preflight.retryAfterUnauthenticatedMs !== null &&
+    attempt.verdict.kind === "unauthenticated" &&
+    attempt.run.cancelledBy === null &&
+    !attempt.run.timedOut
   ) {
     preflightState = {
-      argv: [preflightExecutable, ...preflight.args],
+      argv: [executable, ...preflightArgs],
       status: "failed",
-      evidence: rawPreflightEvidence,
+      evidence: attempt.raw,
     };
     progress.preflight = preflightState;
 
-    const retryWait = await waitForGrokPreflightRetry(deadlineAt, cancellation);
+    const retryWait = await waitForPreflightRetry(
+      preflight.retryAfterUnauthenticatedMs,
+      deadlineAt,
+      cancellation
+    );
     if (retryWait !== "ready") {
       preflightState = {
         ...preflightState,
@@ -1025,34 +884,19 @@ async function executeLane(
       );
     }
 
-    const firstPreflightEvidence = rawPreflightEvidence;
-    preflightResult = await runProcess(
-      preflightExecutable,
-      preflight,
-      options.cwd,
-      env,
-      "",
-      deadlineAt,
-      cancellation
-    );
-    rawPreflightEvidence = evidence(`${preflightResult.stdout}\n${preflightResult.stderr}`);
-    passed = preflightPassed(options.provider, preflightModel, preflightResult);
-    preflightEvidence = retriedPreflightEvidence(
-      firstPreflightEvidence,
-      passed
-        ? successfulPreflightEvidence(options.provider, preflightModel)
-        : rawPreflightEvidence,
-      passed
-    );
+    const firstPreflightEvidence = attempt.raw;
+    attempt = await runPreflight();
+    preflightEvidence = retriedPreflightEvidence(firstPreflightEvidence, attempt.shown, attempt.passed);
   }
 
+  const preflightResult = attempt.run;
   preflightState = {
-    argv: [preflightExecutable, ...preflight.args],
+    argv: [executable, ...preflightArgs],
     status: preflightResult.cancelledBy !== null
       ? "cancelled"
       : preflightResult.timedOut
         ? "timed-out"
-        : passed
+        : attempt.passed
           ? "passed"
           : "failed",
     evidence: preflightEvidence,
@@ -1061,24 +905,21 @@ async function executeLane(
 
   if (preflightState.status !== "passed") {
     const completed = Date.now();
-    const preflightFailure = preflightFailureStatus(
-      options.provider,
-      preflightModel,
-      rawPreflightEvidence
-    );
     const status: ReceiptStatus = preflightResult.cancelledBy !== null
       ? "cancelled"
       : preflightResult.timedOut
         ? "timed-out"
-        : preflightFailure;
-    receipt = completeReceipt(options, {
+        : attempt.verdict.kind === "inconclusive" || attempt.verdict.kind === "passed"
+          ? "child-failed"
+          : attempt.verdict.kind;
+    receipt = completeReceipt(lane, {
       status,
       startedAt,
       completedAt: new Date(completed).toISOString(),
       elapsedMs: completed - started,
       executable,
       preflight: preflightState,
-      argv: [executable, ...invocation.args],
+      argv: [executable, ...launchArgs],
       exitCode: preflightResult.exitCode,
       signal: preflightResult.signal,
       reportedModel: null,
@@ -1092,12 +933,14 @@ async function executeLane(
           ? `launcher received ${preflightResult.cancelledBy} during preflight`
           : preflightResult.timedOut
             ? "authentication preflight timed out"
-            : "authentication or model preflight failed",
+            : attempt.verdict.kind === "inconclusive"
+              ? "authentication preflight output was inconclusive"
+              : "authentication or model preflight failed",
         evidence: preflightEvidence,
       },
     });
-    removeIfExists(options.outputPath);
-    writeReceipt(options.receiptPath, receipt);
+    removeIfExists(lane.outputPath);
+    writeReceipt(lane.receiptPath, receipt);
     return { exitCode: statusExitCode(status), receipt };
   }
 
@@ -1110,14 +953,14 @@ async function executeLane(
 
   const result = await runProcess(
     executable,
-    invocation,
-    options.cwd,
+    launchArgs,
+    lane.cwd,
     env,
-    prompt,
+    adapter.launch.prompt === "stdin" ? adapter.launch.stdinEnvelope?.(prompt) ?? prompt : null,
     deadlineAt,
     cancellation,
     streamFiles,
-    options.provider === "codex" ? codexNetworkWaitWatcher() : undefined
+    adapter.launch.watchStdout?.()
   );
   const completed = Date.now();
   const base = {
@@ -1126,36 +969,25 @@ async function executeLane(
     elapsedMs: completed - started,
     executable,
     preflight: preflightState,
-    argv: [executable, ...invocation.args],
+    argv: [executable, ...launchArgs],
     exitCode: result.exitCode,
     signal: result.signal,
   } as const;
 
-  let parsed: ParsedOutput | null = null;
-  let parseError: unknown = null;
-  if (result.cancelledBy === null && !result.timedOut && !result.watcherStopped
-      && (result.exitCode === 0 || (options.provider === "grok" && result.stdout.trim().length > 0))) {
-    try {
-      parsed = parseProviderOutput(options.provider, result.stdout, result.stderr, options.model);
-    } catch (error) {
-      parseError = error;
-    }
-  }
-  const providerFailure = parseError instanceof ProviderResultError ? parseError : null;
-  const metadata = providerFailure?.metadata ?? (result.exitCode === 0 ? parsed : null);
-  if (result.cancelledBy !== null || result.timedOut || result.watcherStopped || providerFailure !== null
+  const parsed: ParseResult | null = result.cancelledBy === null && !result.timedOut && result.streamFailure === null
+    ? adapter.parse({ ...result, sidecar: readIfPresent(providerSidecar(lane)?.facts.output) }, lane)
+    : null;
+  const providerFailure = parsed?.kind === "provider-failure" ? parsed : null;
+  const metadata = providerFailure?.metadata
+    ?? (result.exitCode === 0 && parsed?.kind === "complete" ? parsed.metadata : null);
+  if (result.cancelledBy !== null || result.timedOut || result.streamFailure !== null || providerFailure !== null
       || result.exitCode !== 0) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
-    const codexTerminal = options.provider === "codex" ? codexFailureMessage(result.stdout) : null;
     const status: ReceiptStatus = result.cancelledBy !== null
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
-        : result.watcherStopped
-          ? "unavailable-network"
-          : providerFailure?.status ?? (codexTerminal !== null
-            ? codexTerminalStatus(codexTerminal)
-            : modelFailureStatus(options.provider === "codex" ? result.stderr : rawFailureEvidence));
+        : result.streamFailure?.status ?? providerFailure?.status ?? modelFailureStatus(rawFailureEvidence);
     const sandboxHint = status === "child-failed" && providerFailure === null && parentNetworkDisabled
       ? "likely cause: Codex parent sandbox has network disabled; see provider-dispatch.md#host-and-parent-prerequisites"
       : null;
@@ -1164,12 +996,12 @@ async function executeLane(
       : sandboxHint !== null
         ? `${sandboxHint}\n${rawFailureEvidence}`
         : rawFailureEvidence);
-    receipt = completeReceipt(options, {
+    receipt = completeReceipt(lane, {
       ...base,
       status,
       ...(metadata === null
         ? { reportedModel: null, modelVerified: false, modelEvidence: null }
-        : modelProof(options.provider, options.model, metadata.reportedModel, options.effort)),
+        : modelProof(lane, metadata.reportedModel)),
       sessionId: metadata?.sessionId ?? null,
       usage: metadata?.usage ?? null,
       costUsd: metadata?.costUsd ?? null,
@@ -1179,46 +1011,40 @@ async function executeLane(
             ? `launcher received ${result.cancelledBy}; signal was sent to child`
             : `launcher received ${result.cancelledBy} after child exited`
           : result.timedOut
-            ? `launcher exceeded the explicit ${options.timeoutMs}ms deadline`
-            : result.watcherStopped
-              ? "Codex was waiting for the network before the model produced output"
-              : providerFailure?.message ?? `child exited with status ${result.exitCode}${sandboxHint === null ? "" : `; ${sandboxHint}`}`,
+            ? `launcher exceeded the explicit ${lane.timeoutMs}ms deadline`
+            : result.streamFailure?.message ?? providerFailure?.message ?? `child exited with status ${result.exitCode}${sandboxHint === null ? "" : `; ${sandboxHint}`}`,
         evidence: failureEvidence,
       },
     });
-    removeIfExists(options.outputPath);
-    writeReceipt(options.receiptPath, receipt);
+    removeIfExists(lane.outputPath);
+    writeReceipt(lane.receiptPath, receipt);
     return { exitCode: statusExitCode(status), receipt };
   }
 
   try {
-    if (parseError !== null) throw parseError;
-    if (parsed === null) throw new Error("provider result was not parsed");
-    const proof = modelProof(
-      options.provider,
-      options.model,
-      parsed.reportedModel,
-      options.effort
-    );
+    if (parsed?.kind !== "complete") {
+      throw new Error(parsed?.kind === "malformed" ? parsed.message : "provider result was not parsed");
+    }
+    const proof = modelProof(lane, parsed.metadata.reportedModel);
     if (!proof.modelVerified && proof.modelEvidence !== "pinned-argv") {
       throw new Error(
-        `requested model ${options.model} was not reported by ${options.provider}`
+        `requested model ${lane.model} was not reported by ${adapter.id}`
       );
     }
-    writeFileSync(options.outputPath, parsed.text, { encoding: "utf8", mode: 0o600 });
-    receipt = completeReceipt(options, {
+    writeFileSync(lane.outputPath, parsed.text, { encoding: "utf8", mode: 0o600 });
+    receipt = completeReceipt(lane, {
       ...base,
       status: "complete",
       ...proof,
-      sessionId: parsed.sessionId,
-      usage: parsed.usage,
-      costUsd: parsed.costUsd,
+      sessionId: parsed.metadata.sessionId,
+      usage: parsed.metadata.usage,
+      costUsd: parsed.metadata.costUsd,
       error: null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    removeIfExists(options.outputPath);
-    receipt = completeReceipt(options, {
+    removeIfExists(lane.outputPath);
+    receipt = completeReceipt(lane, {
       ...base,
       status: "malformed-output",
       reportedModel: null,
@@ -1234,60 +1060,53 @@ async function executeLane(
     });
   }
 
-  writeReceipt(options.receiptPath, receipt);
+  writeReceipt(lane.receiptPath, receipt);
   return { exitCode: statusExitCode(receipt.status), receipt };
 }
 
 export async function runLane(
-  options: RunnerOptions,
+  lane: Lane,
   started: number = Date.now()
 ): Promise<RunResult> {
-  validateOptions(options);
-  const deadlineAt = options.timeoutMs === null ? null : started + options.timeoutMs;
-  const preflight = preflightCommand(options.provider);
+  validateLane(lane);
+  const deadlineAt = lane.timeoutMs === null ? null : started + lane.timeoutMs;
+  const launchArgs = lane.adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: providerSidecar(lane)?.facts ?? null });
   const progress: LaneProgress = {
     executable: null,
     preflight: {
-      argv: [preflight.command, ...preflight.args],
+      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane, providerSidecar(lane)?.facts ?? null)],
       status: "not-run",
       evidence: "",
     },
-    argv: [],
+    argv: [lane.adapter.executable, ...launchArgs],
   };
   const cancellation = installRunCancellation();
   let streamFiles: ModelStreams | null = null;
   try {
-    streamFiles = reserveOutputs(options);
+    streamFiles = reserveOutputs(lane);
     try {
-      const invocation = invocationCommand(options);
-      progress.argv = [invocation.command, ...invocation.args];
       return await executeLane(
-        options,
+        lane,
         cancellation,
         started,
         deadlineAt,
-        invocation,
-        preflight,
+        launchArgs,
         progress,
         streamFiles
       );
     } catch (error) {
       const completed = Date.now();
       const signal = cancellation.signal;
-      const unavailableModel = error instanceof UnavailableModelError;
-      const status: ReceiptStatus = unavailableModel
-        ? "unavailable-model"
-        : signal !== null
-          ? "cancelled"
-          : deadlineAt !== null && completed >= deadlineAt
-            ? "timed-out"
-            : "child-failed";
+      const status: ReceiptStatus = signal !== null
+        ? "cancelled"
+        : deadlineAt !== null && completed >= deadlineAt
+          ? "timed-out"
+          : "child-failed";
       const message = error instanceof Error ? error.message : String(error);
-      const terminalPreflight = progress.preflight.status === "not-run" &&
-          (status === "cancelled" || status === "timed-out")
+      const terminalPreflight = progress.preflight.status === "not-run" && status !== "child-failed"
         ? { ...progress.preflight, status }
         : progress.preflight;
-      const receipt = completeReceipt(options, {
+      const receipt = completeReceipt(lane, {
         status,
         startedAt: new Date(started).toISOString(),
         completedAt: new Date(completed).toISOString(),
@@ -1304,18 +1123,16 @@ export async function runLane(
         usage: null,
         costUsd: null,
         error: {
-          message: unavailableModel
-            ? message
-            : status === "cancelled"
-              ? `launcher received ${signal} after reserving output paths`
-              : status === "timed-out"
-                ? "explicit deadline elapsed after reserving output paths"
-                : "launcher failed after reserving output paths",
-          evidence: unavailableModel ? "" : evidence(message),
+          message: status === "cancelled"
+            ? `launcher received ${signal} after reserving output paths`
+            : status === "timed-out"
+              ? "explicit deadline elapsed after reserving output paths"
+              : "launcher failed after reserving output paths",
+          evidence: evidence(message),
         },
       });
-      removeIfExists(options.outputPath);
-      writeReceipt(options.receiptPath, receipt);
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
       return { exitCode: statusExitCode(status), receipt };
     }
   } finally {
@@ -1325,14 +1142,4 @@ export async function runLane(
       closeSync(streamFiles.stderr);
     }
   }
-}
-
-export function resolvedOptions(options: RunnerOptions): RunnerOptions {
-  return {
-    ...options,
-    promptPath: resolve(options.promptPath),
-    cwd: resolve(options.cwd),
-    outputPath: resolve(options.outputPath),
-    receiptPath: resolve(options.receiptPath),
-  };
 }
