@@ -51,7 +51,6 @@ export interface RunResult {
   readonly receipt: RunnerReceipt;
 }
 
-// A provider's terminal event ends its stream, so malformed output keeps the tail.
 function trailingEvidence(value: string): string {
   return value.trim().slice(-ERROR_EVIDENCE_LIMIT);
 }
@@ -80,7 +79,6 @@ interface ReservedSidecar {
   readonly configContent: string | null;
 }
 
-// The provider sidecar directory sits next to the receipt, like the stream files.
 function providerSidecar(lane: Lane): ReservedSidecar | null {
   const declared = lane.adapter.launch.sidecar;
   if (declared === null) return null;
@@ -116,7 +114,6 @@ function reserveOutputs(lane: Lane): ModelStreams {
     stderr = openSync(stderrPath, "wx", 0o600);
     created.push(stderrPath);
     if (sidecar !== null) {
-      // Not recursive, so an existing directory refuses the lane like any other reserved path.
       mkdirSync(sidecar.facts.directory, { mode: 0o700 });
       created.push(sidecar.facts.directory);
       if (sidecar.facts.config !== null && sidecar.configContent !== null) {
@@ -174,8 +171,6 @@ function installRunCancellation(): RunCancellation {
   };
 }
 
-// The adapter's policy applies first, then its run-owned values; the parent's identity markers are
-// always dropped last, so the child cannot detect a nested harness.
 export function childEnvironment(
   lane: Lane,
   source: NodeJS.ProcessEnv = process.env
@@ -283,7 +278,6 @@ function captureStream(
       try {
         await reader.cancel();
       } catch {
-        // The stream may already be closed and its reader released.
       }
     },
   };
@@ -470,11 +464,6 @@ function within(parent: string, child: string): boolean {
   return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-// A linked worktree keeps its refs, objects and index in a git directory outside the cwd. Git
-// itself finds that directory, from the cwd and with the writer's environment, so the deny matches
-// what the writer's own git will use. Returns null for a non-repository or a directory the cwd
-// contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
-// cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
 export async function discoverSharedGitDir(
   cwd: string,
   env: NodeJS.ProcessEnv,
@@ -853,7 +842,6 @@ async function executeLane(
   let attempt = await runPreflight();
   let preflightEvidence = attempt.shown;
 
-  // The only retry an adapter can request is one more preflight after an "unauthenticated" verdict.
   if (
     preflight.retryAfterUnauthenticatedMs !== null &&
     attempt.verdict.kind === "unauthenticated" &&

@@ -9,16 +9,16 @@ bug-fix: codex:gpt-6.1-sol@high
 perf-issue: codex:gpt-6.1-sol@high
 hillclimb: codex:gpt-6.1-sol@high
 judgment and prose: claude:opus@high
-hardest tasks: claude:fable@high
+hardest tasks: claude:opus@high
 how explorer: codex:gpt-6.1-sol@high
 how explainer: codex:gpt-6.1-sol@high
 why investigators, synthesizer: inherit-parent
 reflect tooling, judgment, divergent, synthesizer: inherit-parent
-arena runners: claude:fable@high, codex:gpt-6.1-sol@high
-arena cross-judge pool: codex:gpt-6.1-sol@high, claude:fable@high
+arena runners: claude:opus@high, codex:gpt-6.1-sol@high
+arena cross-judge pool: codex:gpt-6.1-sol@high, claude:opus@high
 swarm workers: codex:gpt-6.1-sol@high
-architect runners: claude:fable@high, codex:gpt-6.1-sol@high
-interrogate reviewers: claude:fable@high, codex:gpt-6.1-sol@high
+architect runners: claude:opus@high, codex:gpt-6.1-sol@high
+interrogate reviewers: claude:opus@high, codex:gpt-6.1-sol@high
 `;
 
 const ROUTED_SKILL_LINES: Record<string, string[]> = {
@@ -58,12 +58,12 @@ describe("routed skills read the owner's model sheet", () => {
   it("resolves every owner entry to its assigned registry family at high effort", () => {
     const expected = new Map<string, string[]>([
       ["judgment and prose", ["opus"]],
-      ["hardest tasks", ["fable"]],
-      ["arena cross-judge pool", ["sol", "fable"]],
+      ["hardest tasks", ["opus"]],
+      ["arena cross-judge pool", ["sol", "opus"]],
       ["why investigators, synthesizer", ["inherit-parent"]],
       ["reflect tooling, judgment, divergent, synthesizer", ["inherit-parent"]],
       ...["arena runners", "architect runners", "interrogate reviewers"]
-        .map((role): [string, string[]] => [role, ["fable", "sol"]]),
+        .map((role): [string, string[]] => [role, ["opus", "sol"]]),
     ]);
     for (const [role, entries] of owner) {
       const families = entries.map((entry) => {
