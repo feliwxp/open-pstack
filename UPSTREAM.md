@@ -8,9 +8,9 @@ This fork follows [ericlitman/open-pstack](https://github.com/ericlitman/open-ps
 | --- | --- |
 | Repository | `https://github.com/ericlitman/open-pstack.git` |
 | Branch | `main` |
-| open-pstack commit | `dc9d157276ff9c3fdf1e4a8d3e39e714debef8b1` |
-| open-pstack release | `1.16.0` |
-| open-pstack version | `1.16.0-fel.1` |
+| open-pstack commit | `c0de3509c5f9c5cf24bcb5af13adf5f6e4ebf7c5` |
+| open-pstack release | `1.21.0` |
+| open-pstack version | `1.21.0-fel.1` |
 
 The release row names the followed version. The version row names this fork's package version. The commit row is labelled `open-pstack commit` so that it never reads as the Cursor `Commit` row in open-pstack's record below.
 
@@ -37,6 +37,7 @@ UPSTREAM.md
 docs/reference.md
 plugins/pstack/.claude-plugin/plugin.json
 plugins/pstack/.codex-plugin/plugin.json
+plugins/pstack/.grok-plugin/plugin.json
 plugins/pstack/skills/poteto-mode/references/provider-dispatch.md
 plugins/pstack/skills/poteto-mode/scripts/runner/fixtures/codex-0.160.0/
 plugins/pstack/skills/poteto-mode/scripts/runner/owner-sheet.test.ts
@@ -79,6 +80,14 @@ tests/skill-collision-repro.sh
 - **No-comments sweep.** Open-pstack 1.16.0 deletes code comments from the runner and tests. Where that sweep met a fork-retained hunk in `providers/codex.ts`, `providers/shared.ts` and `tests/skill-collision-repro.sh`, the fork keeps its code and drops the comments.
 - **Verifier and sync steps.** Open-pstack 1.16.0 edits `.claude/skills/verify-open-pstack/` and its own check and incorporate steps. The fork keeps the verifier deleted and keeps its own steps above, as the ledger says. Open-pstack's new #232 record entry is kept below.
 
+## Changed at 1.21.0-fel.1
+
+- **Verifier stays deleted.** Open-pstack 1.17.0 to 1.21.0 edit `.claude/skills/verify-open-pstack/` and add its Grok and T3 Code live-gate cases (`features/grok.md`, `features/t3.md`, `scripts/grok.ts` and its test). The fork keeps the whole tree deleted, those cases included, as the ledger says. `tests/skill-collision-repro.sh` keeps the fork's absence check in place of open-pstack's verifier checks.
+- **Grok manifest.** Open-pstack 1.21.0 adds `plugins/pstack/.grok-plugin/plugin.json`. It carries the fork version, and the static invariants compare it with the other three manifests.
+- **Muse model failure.** Open-pstack 1.18.0 adds Muse Code's unknown-model text to `modelFailureStatus` in `types.ts`. The fork adds that pattern to its own `unavailable-model` test and keeps its usage, rate and network statuses.
+- **Fork instructions.** `AGENTS.md` takes open-pstack's Grok and T3 Code harness sentences. It drops open-pstack's verifier, Mergify and release paragraphs, as the fork-instructions entry says.
+- **Operator prompts.** Open-pstack adds `.agents/babysit-pr.md`, `.agents/run-these.md`, `.agents/triage-backlog.md` and `.github/workflows/unfret-threads.yml`. They describe open-pstack's own live gate, Mergify queue and Unfret threads. The fork takes them unchanged, like `.mergify.yml` and `REVIEW.md`. No harness loads the prompts on its own, and the workflow's only job runs for an Unfret review, which the fork does not receive.
+
 ## Check for changes
 
 Add the upstream remote once in a fresh clone.
@@ -91,7 +100,7 @@ Fetch the followed branch and inspect commits after the recorded sync point.
 
 ```shell
 git fetch upstream main
-git log --oneline dc9d157276ff9c3fdf1e4a8d3e39e714debef8b1..upstream/main
+git log --oneline c0de3509c5f9c5cf24bcb5af13adf5f6e4ebf7c5..upstream/main
 ```
 
 Work is tracked in the fork's own GitHub Issues. Never push to or open a pull request against `ericlitman/open-pstack`.
@@ -115,11 +124,11 @@ The sections below are open-pstack's own Cursor record. Preserve them during lat
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `88d47514b82e7c44f00f2b2a72ff6dd12158038c` |
-| Upstream version | `0.15.29` |
-| open-pstack version | `1.16.0` |
+| Commit | `2776ddd2355d6d6c8747d3964600f28daf62f049` |
+| Upstream version | `0.15.36` |
+| open-pstack version | `1.21.0` |
 
-The table above is the current Cursor sync point. Open Pstack 1.16.0 imported this 0.15.29 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.17.0 imported this 0.15.36 sync, and 1.18.0 to 1.21.0 keep it. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
@@ -132,7 +141,7 @@ The table above is the current Cursor sync point. Open Pstack 1.16.0 imported th
 - The explicit Grok, Opus, and Sol defaults for the Why and Reflect roles are not applied. Those roles stay on `inherit-parent` because the external runner omits the parent's MCP servers.
 - The Claude manifest does not take the logo field from `efa2a53` because Claude Code has no schema for it. The shared asset is exposed through the Codex manifest instead.
 - Commit `df58112` (pstack 0.15.15) is not applied. It drops Sol from every default, cuts the panels to Opus and Grok, and moves Opus from `max` to `xhigh`. Open Pstack keeps its own model defaults and three-model panels.
-- The `disable-model-invocation: true` lines that `23e4138` puts on `benchmark-checklist` and `principle-explain-the-number` are not applied. The same flag, which upstream carried on principle leaves and `figure-it-out` before 0.15.5, stays off as in earlier syncs. Principle leaves keep `user-invocable: false`, and `figure-it-out` and `benchmark-checklist` stay model-invocable because poteto-mode routes to them by name. The typed-only `correct`, `ketchup`, `poteto-help`, `in-your-own-words`, and `sharpen` keep the flag.
+- The `disable-model-invocation: true` lines that `23e4138` puts on `benchmark-checklist` and `principle-explain-the-number`, and that `ab1f702` puts back on `principle-explain-the-number`, are not applied. The same flag, which upstream carried on principle leaves and `figure-it-out` before 0.15.5, stays off as in earlier syncs. Principle leaves keep `user-invocable: false`, and `figure-it-out` and `benchmark-checklist` stay model-invocable because poteto-mode routes to them by name. The typed-only `correct`, `ketchup`, `ketchup-video`, `poteto-help`, `in-your-own-words`, `sharpen`, and `statechart` keep the flag.
 - The Built-in PR tool paragraph from `23e4138` and `00b14f1` is not applied. It describes a Cursor run tool that Claude Code and Codex do not have.
 - The 40-line squash-body cutoff returns in `00b14f1` and stays omitted, as in the 0.15.0 sync.
 - Autopilot-full step 5's trunk-move rule from `23e4138`, and its revision in `ce649c0`, are not applied. The `23e4138` rule merged without another rebase when `git merge-tree` was clean and trunk touched none of the PR's paths or CI paths, and both checks pass when trunk removes an export that the PR's new code imports. `ce649c0` replaces those checks with the owner's judgment: merge when trunk's changes cannot affect the patch, and run the patch's checks on the merge result when trunk changed a caller or a dependency. An owner who misses a dependency still merges an untested tree. Step 5 keeps the rebase at merge prep and sends a trunk move before the merge through the patch ID rule in `playbooks/shipping.md`. `ce649c0`'s lockfile exception and its hold before a third rebase go with the rule.
@@ -147,6 +156,10 @@ The table above is the current Cursor sync point. Open Pstack 1.16.0 imported th
 - `create-formal-verification-skill` takes `4382e68` without its `disable-model-invocation: true` line, because setup's formal verification offer invokes it and the flag blocks that route on Claude Code. `tests/skill-collision-repro.sh` lists it in `routed_model_skills`. `maintain-formal-verification-skill` keeps the flag and runs only when typed.
 - Setup's verification offers are steps 10 and 11 in the port, after its step 9 smoke test. The port never took upstream's step 7, "Offer a verification skill", which upstream has carried since 0.11.3. This sync restores it as step 10, and `f9be7aa`'s formal verification offer becomes step 11. Each keeps upstream's check for a project that already has one.
 - `poteto-agent.md` does not take `b93e811`'s search of `~/.cursor/plugins/` for poteto-mode, its highest-version rule, or its note that the skill catalog hides poteto-mode. The Claude agent preloads `pstack:poteto-mode`, the port's poteto-mode is not hidden, and Codex has no `poteto-agent` type. The agent keeps upstream's "Use the absolute path your parent gave you."
+- `ab1f702`'s `disable-model-invocation: true` on `interrogate` is not applied. Poteto-mode and the feature playbook route to it by name, and the flag blocks that route on Claude Code. A skill that needs a typed-only skill, such as `interrogate` with `in-your-own-words` or `create-formal-verification-skill` with `statechart` from `00d5dec`, reads that skill's `SKILL.md` and follows it.
+- `ab1f702`'s fallback chains for a rejected model slug are not applied: the rule in poteto-mode's Match the model to the job that walks the calling skill's fallback and then the closest valid slug or the parent model, Arena step 3's family defaults and closest-slug rule, Swarm step 3's default and closest-slug rule, and the arena judge's same-model closest slug and default-pool retry. Neither is Arena step 3's rule that refills dropped runner seats on a remaining runner's model or the parent model. Each conflicts with the named-dropout rule in `provider-dispatch.md`. The arena judge keeps upstream's rule that it is never from the parent's provider, and when no configured entry runs, Arena skips the judge and says so.
+- `c742dd6`'s Orchestrate takes these mappings: `Task` workers go through provider dispatch, cloud VMs become dedicated local worktrees, the Project tracker and Project store become `<config-home>/orchestrate/<project-slug>/notes.md`, PR and CI event subscriptions become `watch-pr` waits, and forking a worker becomes reusing its worktree. "Call no scripts" means no orchestration-store scripts; the provider launcher and `watch-pr` stay. Its retry on a different model after a tool error is not applied: that failure is a named dropout, and a worker is replaced only on affirmative failure evidence. `3c596e7`'s `orch` change is superseded by the deletion of `scripts/orch/`.
+- Upstream's 0.15.30 to 0.15.36 manifest bumps in `pstack/plugin.json` and `pstack/.cursor-plugin/plugin.json` from `eb4db2b`, `642289e`, `b1a1298`, `7c7bde7`, `164ced1`, `ab1f702` and `c742dd6`, and the guide edits in `eb4db2b`, `3c0fdb4`, `34b1b7c`, `ab1f702` and `c742dd6`, are not applied, as for the earlier bumps and guide edits above. So are the matching updates to upstream's generated `harness/pstack/claude-code/` tree.
 
 ## Local port-patch ledger
 
@@ -156,8 +169,23 @@ The table above is the current Cursor sync point. Open Pstack 1.16.0 imported th
 
 - **#157 — role pointers**: Cursor names model descriptors in the Arena, Architect, How, Interrogate, and Swarm skills, the bug-fix, feature, hillclimb, perf-issue, and refactoring playbooks, poteto-mode's delegation defaults, and setup's probe table and first-run sheet. The port replaces each with a role pointer: the role's backticked sheet label and a link to `plugins/pstack/skills/poteto-mode/references/model-catalog.md#role-defaults`, which `registry/render.ts` generates from `plugins/pstack/skills/poteto-mode/scripts/runner/registry/models.ts`. Interrogate's reviewer table and setup's probe table and example sheet are deleted. When an upstream sync changes a model slug on one of these lines, keep the port's line and put the model change in `registry/models.ts`. `runner/registry.test.ts` enforces the rule: `ROLE_POINTERS` names each file's roles, and its text scan rejects any descriptor or versioned model name in `plugins/pstack/**/*.md`, `README.md`, and `docs/reference.md` outside the generated catalog and agents.
 
-- **#46 — quiet setup reruns**: Upstream's setup has no keep-roles, per-family effort, or write-confirmation questions, so this is a port patch. `setup-pstack/SKILL.md` states one qualifying-rerun exception before step 2's keep-roles question. On a rerun whose sheet loaded with one valid setting line, with no change named and no inconsistency or kept-predecessor proposal that needs a choice, setup validates in step 3, keeps and prints the roles and efforts instead of asking steps 2 and 4, and writes without step 7's confirmation when every step 5 probe passes. Steps 4, 7 and 8 and the offers in steps 10 and 11 each name the exception. It skips no validation, permission check, snapshot, readback, or the step 9 smoke test, and a failed probe still stops without writing. `poteto-help` says the same for reruns. The verifier's `keep-setting` case gives no answers and requires the sheet and Codex mirror to keep their bytes with no `AskUserQuestion` call. Preserve this divergence during upstream syncs.
+- **#46 — quiet setup reruns**: Upstream's setup has no keep-roles, per-family effort, or write-confirmation questions, so this is a port patch. `setup-pstack/SKILL.md` states one qualifying-rerun exception before step 2's keep-roles question. On a rerun whose sheet loaded with a valid writer sandbox line for each provider setup asks about, with no change named and no inconsistency or kept-predecessor proposal that needs a choice, setup validates in step 3, keeps and prints the roles and efforts instead of asking steps 2 and 4, and writes without step 7's confirmation when every step 5 probe passes. Steps 4, 7 and 8 and the offers in steps 10 and 11 each name the exception. It skips no validation, permission check, snapshot, readback, or the step 9 smoke test, and a failed probe still stops without writing. `poteto-help` says the same for reruns. Preserve this divergence during upstream syncs.
 
-- **#191 — landing playbooks and per-spawn effort**: `ce649c0` cuts Shipping to six steps and both autopilots to principles. The port takes the cut's rules and reasons but keeps the landing procedure from 1.3.0: Shipping keeps steps 1 to 9, Autopilot-full step 2 holds the guarded rebase and push, and Autopilot-stack step 2 holds the fork and topology rules. Those steps disarm auto-merge and merge-queue entries before verification and before any rewrite, keep the verdict head and base apart from the landing head and base, resolve the base fetch remote apart from the head push URL, bind each push to a captured SHA, and merge only through a server-enforced expected head. The named landing invariants in `tests/skill-collision-repro.sh` check those rules by step and phrase, so a sync that moves them updates the invariants in the same change. `ce649c0`'s Match the model to the job rule is taken with port adaptations: the starting level is the role's configured effort, an unlisted effort moves to the nearest effort the catalog row lists, a configured `ultra` stays, and the fast and standard speed sentences are dropped because the port's descriptors carry no speed selector.
+- **#191 — landing playbooks and per-spawn effort**: `ce649c0` cuts Shipping to six steps and both autopilots to principles. The port takes the cut's rules and reasons but keeps the landing procedure from 1.3.0: Shipping keeps steps 1 to 9, and Autopilot-full step 2 holds the guarded rebase and push. Since `ab1f702` made Autopilot-stack Autopilot-full without the merge, Autopilot-full step 2's stacked-owner paragraph also holds the fork, split-remote and parent-tip rules that Autopilot-stack step 2 held, and each owner restacks its own branch through them. Those steps disarm auto-merge and merge-queue entries before verification and before any rewrite, keep the verdict head and base apart from the landing head and base, resolve the base fetch remote apart from the head push URL, bind each push to a captured SHA, and merge only through a server-enforced expected head. The named landing invariants in `tests/skill-collision-repro.sh` check those rules by step and phrase, so a sync that moves them updates the invariants in the same change. `ce649c0`'s Match the model to the job rule is taken with port adaptations: the starting level is the role's configured effort, an unlisted effort moves to the nearest effort the catalog row lists, a configured `ultra` stays, and the fast and standard speed sentences are dropped because the port's descriptors carry no speed selector.
 
 - **#232 — subagent waits in babysit**: Cursor's babysit step 6 runs `drive` and `background` under `/loop`. Claude Code subagents have no `ScheduleWakeup`, so `/loop` cannot run in them. The port adds one sentence after the `/loop` sentence that limits `/loop` to the main session and points a Claude Code subagent to `plugins/pstack/skills/poteto-mode/references/codex-tools.md#waits-on-claude-code`, which holds the wait rules. Preserve this sentence during upstream syncs.
+
+- **#262 — interrogate adversaries**: `ab1f702` spawns each adversary as a Cursor subagent that keeps repros in its own worktree. The port routes each adversary's descriptor with `isolated-write` in a dedicated worktree that the parent prepares at the reviewed HEAD, with the scope's uncommitted tracked and untracked changes copied in, because Claude external writers cannot write the shared `.git`. A provider whose route has no `isolated-write` mode is a named dropout, the output lists each adversary or its dropout, and no completed adversary is reported as incomplete coverage. Keep the dispatch-contract paragraph and the `interrogate reviewers` role pointer. Setup counts `interrogate reviewers` among the roles whose lanes write files.
+
+- **#262 — reflect skill copies**: `7054003` copies a skill out of the plugin cache to `.cursor/skills/` or `~/.cursor/skills/` before editing it. The port names the destinations per harness once, in `plugins/pstack/skills/poteto-mode/references/codex-tools.md#reflect-skill-copies`, and `reflect/SKILL.md` points there.
+
+- **#262 — statechart types, no test corpus**: `statechart/scripts/test/` is not imported. It is 2.9 MB of upstream test data and TLC output, more than the review service's reviewers can read, and upstream's CI runs it. The root `bun run typecheck` checks statechart's scripts: `statechart/scripts/package.json` adds pinned `typescript` and `@types/node` and a `typecheck` script, with a `bun.lock`, and the port annotates `exitClass` in `run.ts` with its `0 | 1 | 2` return type, which upstream's code needs under strict checking. Keep these lines during syncs until upstream fixes the type, and keep `scripts/test/` out.
+
+- **#263, #258 — writer sandbox lines and Muse**: upstream has no external runner, provider write modes or Muse provider. `provider-dispatch.md`'s Writer sandbox section and `setup-pstack/SKILL.md`'s `<provider> writer sandbox:` lines, opt-in question and writer-role check are port patches. Keep them, and the runner's `providers/muse.ts`, through syncs.
+
+- **#265 — Orchestrate verifier and sub-coordinator**: keep upstream's "on a different model family" for each PR's verifier; do not substitute provider. After upstream's sub-coordinator sentence, the port adds that where a subagent cannot start agents, such as a Claude Code native lane, the coordinator starts the sub-coordinator's workers from the kickoffs it writes and hands their results back to it. `codex-tools.md#subagent-policy` states that native lanes disallow `Agent` and `Task`.
+
+- **#253 — T3 Code parent**: Cursor has no T3 Code route. The port adds the `T3 host` section to `provider-dispatch.md`: a lane whose provider T3 offers and has enabled goes through `delegate_task`, and any other lane takes the standalone route of the Claude Code or Codex runtime. `codex-tools.md` points to it, and `setup-pstack/SKILL.md` routes its probes and smoke panel the same way at its existing steps. No other skill body changes. Keep these lines during syncs.
+
+- **#281 — Grok parent**: Cursor has no Grok parent. Started from max-metaplanet's PR #282. The port adds `grok` to `PARENTS` with `explicitLaneRoute: "runner"`, so the generated route table has a Grok parent column and the runner accepts `--parent grok`, including a Grok provider. Claude and Codex keep `native` and stay native-only for their own provider. It adds `plugins/pstack/.grok-plugin/plugin.json` and the generated `grok-agents/` directory, a Grok column and a Waits on Grok section in `codex-tools.md`, the Grok rules in `provider-dispatch.md`, and the Grok sheet in `setup-pstack/SKILL.md` at its existing steps. Keep these lines during syncs.
+
