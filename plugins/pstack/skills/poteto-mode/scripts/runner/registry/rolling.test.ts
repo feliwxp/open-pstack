@@ -50,9 +50,9 @@ describe("Sol rolling model picker", () => {
   ] as const) {
     it(`falls back with a named reason: ${reason} (${run.stdout})`, () => {
       expect(pickListedModel(rolling, run, "high"))
-        .toEqual({ kind: "resolved", model: "gpt-6.2-sol", fallbackReason: reason });
+        .toEqual({ kind: "resolved", model: "gpt-6.1-sol", fallbackReason: reason });
       expect(fallbackDiagnostic(rolling, reason))
-        .toBe(`pstack-runner: sol-fallback: ${reason}; using pinned gpt-6.2-sol`);
+        .toBe(`pstack-runner: sol-fallback: ${reason}; using pinned gpt-6.1-sol`);
     });
   }
 
@@ -75,5 +75,11 @@ describe("Sol rolling model picker", () => {
     const stdout = readFileSync(join(import.meta.dir, "../fixtures/codex-0.170.0/debug-models.json"), "utf8");
     expect(pickListedModel(rolling, { exitCode: 0, stdout, stderr: "" }, "high"))
       .toEqual({ kind: "resolved", model: "gpt-6.2-sol", fallbackReason: null });
+  });
+
+  it("selects gpt-6.1-sol at high from the Codex CLI 0.160.0 fixture", () => {
+    const stdout = readFileSync(join(import.meta.dir, "../fixtures/codex-0.160.0/debug-models.json"), "utf8");
+    expect(pickListedModel(rolling, { exitCode: 0, stdout, stderr: "" }, "high"))
+      .toEqual({ kind: "resolved", model: "gpt-6.1-sol", fallbackReason: null });
   });
 });

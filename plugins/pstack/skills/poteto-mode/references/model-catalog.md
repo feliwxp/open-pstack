@@ -61,7 +61,7 @@ Rolling aliases:
 | Family | Alias | Versioned predecessor |
 | --- | --- | --- |
 | fable | `fable` | `claude-fable-<revision>`, where the revision contains only digits and hyphens |
-| sol | `sol` | Highest numeric version matching `^gpt-([0-9]+(?:\.[0-9]+)*)-sol$` from `codex debug models` that offers the requested effort; pinned fallback `gpt-6.2-sol` |
+| sol | `sol` | Highest numeric version matching `^gpt-([0-9]+(?:\.[0-9]+)*)-sol$` from `codex debug models` that offers the requested effort; pinned fallback `gpt-6.1-sol` |
 | opus | `opus` | `claude-opus-<revision>`, where the revision contains only digits and hyphens |
 | sonnet | `sonnet` | `claude-sonnet-<revision>`, where the revision contains only digits and hyphens |
 

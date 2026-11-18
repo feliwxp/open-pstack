@@ -441,15 +441,15 @@ const stage = isPreflight ? "preflight" : "model";
         const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(0);
         expect(stderr).toHaveBeenCalledTimes(1);
-        expect(stderr).toHaveBeenCalledWith(`pstack-runner: sol-fallback: ${reason}; using pinned gpt-6.2-sol\n`);
+        expect(stderr).toHaveBeenCalledWith(`pstack-runner: sol-fallback: ${reason}; using pinned gpt-6.1-sol\n`);
       } finally {
         stderr.mockRestore();
       }
       expect(receipt(input.receiptPath)).toMatchObject({
-        status: "complete", model: "sol", modelResolution: { model: "gpt-6.2-sol", fallbackUsed: true },
+        status: "complete", model: "sol", modelResolution: { model: "gpt-6.1-sol", fallbackUsed: true },
         reportedModel: null, modelVerified: false, modelEvidence: "pinned-argv",
       });
-      expect(calls(log)[2]!.args).toEqual(expect.arrayContaining(["--model", "gpt-6.2-sol"]));
+      expect(calls(log)[2]!.args).toEqual(expect.arrayContaining(["--model", "gpt-6.1-sol"]));
     });
   }
 

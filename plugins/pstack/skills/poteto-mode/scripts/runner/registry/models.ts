@@ -26,7 +26,7 @@ export const FAMILIES = [
       kind: "model-list",
       argv: ["debug", "models"],
       versionPattern: "^gpt-([0-9]+(?:\\.[0-9]+)*)-sol$",
-      fallbackModel: "gpt-6.2-sol",
+      fallbackModel: "gpt-6.1-sol",
       fallbackDiagnostic: "sol-fallback",
     },
     predecessors: [

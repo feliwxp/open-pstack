@@ -4,7 +4,7 @@
 
 The fork merges open-pstack 1.17.0 to 1.21.0, which track Cursor pstack 0.15.36. They bring the statechart and ketchup-video skills, opt-in writers for external providers, the Muse Code and Amp writers, and Grok and T3 Code as parent harnesses. The owner's sheet keeps Sol on every panel and Opus at high in each former Fable seat. Named dropouts, Codex MCP isolation, and the owner's-sheet test remain. The fork still carries no `verify-open-pstack` skill, so open-pstack's Grok and T3 Code live-gate cases stay out.
 
-The Sol seat now follows the newest Sol model. A sheet entry `codex:sol@high` makes the runner read `codex debug models` at lane start and run the highest `gpt-<version>-sol` that offers the effort. On Codex CLI 0.170.0 that is `gpt-6.2-sol`. If the list cannot be read, the lane runs the pinned `gpt-6.2-sol` and prints a `sol-fallback` line. Pinned Sol slugs still run as written. The receipt's new `modelResolution` field shows the slug that ran and whether the fallback was used.
+The Sol seat now follows the newest Sol model. A sheet entry `codex:sol@high` makes the runner read `codex debug models` at lane start and run the highest `gpt-<version>-sol` that offers the effort. On Codex CLI 0.160.0 that is `gpt-6.1-sol`, and on 0.170.0 it is `gpt-6.2-sol`. If the list cannot be read, the lane runs the pinned `gpt-6.1-sol` and prints a `sol-fallback` line. The fallback is `gpt-6.1-sol` because Codex 0.160.0, the version on the owner's Mac and in the cloud lanes, does not list `gpt-6.2-sol`. Pinned Sol slugs still run as written. The receipt's new `modelResolution` field shows the slug that ran and whether the fallback was used.
 
 ## 1.16.0-fel.1 follows open-pstack 1.16.0
 
