@@ -23,6 +23,7 @@ The release row names the followed version. The version row names this fork's pa
 - **Pull request template.** `.github/pull_request_template.md` records installed-candidate live evidence in the pull request body. It keeps the fork's gate reviewable without a separate status. Remove this difference when the fork adopts open-pstack's gate publication workflow.
 - **Release records.** The versioned manifests, README, reference page, changelog, and this file identify the fork release and its retained differences. They keep provenance and the merge procedure visible. Remove them when the fork ends or becomes identical to the followed release.
 - **No open-pstack verifier.** The fork deletes `.claude/skills/verify-open-pstack` and its Codex link at `.agents/skills/verify-open-pstack`. That skill hard-codes `ericlitman/open-pstack`. It comments and sets `live-gate` on pull requests there from the operator's login. `tests/skill-collision-repro.sh` fails when either path returns. During a merge, keep both paths deleted. Remove this difference when the skill takes its repository from the checkout and the fork adopts open-pstack's gate publication workflow.
+- **Sol rolling name.** Per Fel (2026-11-18), the `sol` family's model is the rolling name `sol`, so a sheet entry reads `codex:sol@high`. Codex does not resolve an alias, so the runner does. At lane start it reads `codex debug models` and runs the highest `gpt-<version>-sol` slug that offers the requested effort, comparing versions as numbers. When the listing cannot be read or holds no Sol slug, it runs the pinned `gpt-6.2-sol` and prints a named `sol-fallback` line. That named fallback is the owner's explicit exception to the no-fallback rule in `AGENTS.md`. Pinned Sol slugs from `gpt-5.6-sol` to `gpt-6.2-sol` stay kept predecessors and run unchanged. The receipt records the slug that ran in `modelResolution`. The change lives in `registry/contract.ts`, `registry/models.ts`, `registry/render.ts`, `registry/rolling.ts`, `run.ts`, `types.ts`, `providers/codex.ts`, their tests, the Codex 0.170.0 listing fixture, the generated catalog, and the dispatch reference. Remove this difference when open-pstack resolves Sol to its newest model.
 - **Ledger guard.** `scripts/fork-ledger.sh` checks the differing paths against the block below. The fork keeps it to catch accidental ports and stale entries. Remove it when the fork ends or open-pstack provides the same guard.
 
 ```fork-paths
@@ -38,13 +39,20 @@ docs/reference.md
 plugins/pstack/.claude-plugin/plugin.json
 plugins/pstack/.codex-plugin/plugin.json
 plugins/pstack/.grok-plugin/plugin.json
+plugins/pstack/skills/poteto-mode/references/model-catalog.md
 plugins/pstack/skills/poteto-mode/references/provider-dispatch.md
 plugins/pstack/skills/poteto-mode/scripts/runner/fixtures/codex-0.160.0/
+plugins/pstack/skills/poteto-mode/scripts/runner/fixtures/codex-0.170.0/
 plugins/pstack/skills/poteto-mode/scripts/runner/owner-sheet.test.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/providers/codex.test.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/providers/codex.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/providers/shared.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/registry.test.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/registry/contract.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/registry/models.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/registry/render.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/registry/rolling.test.ts
+plugins/pstack/skills/poteto-mode/scripts/runner/registry/rolling.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/run.test.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/run.ts
 plugins/pstack/skills/poteto-mode/scripts/runner/types.ts
@@ -86,6 +94,7 @@ tests/skill-collision-repro.sh
 - **Grok manifest.** Open-pstack 1.21.0 adds `plugins/pstack/.grok-plugin/plugin.json`. It carries the fork version, and the static invariants compare it with the other three manifests.
 - **Muse model failure.** Open-pstack 1.18.0 adds Muse Code's unknown-model text to `modelFailureStatus` in `types.ts`. The fork adds that pattern to its own `unavailable-model` test and keeps its usage, rate and network statuses.
 - **Fork instructions.** `AGENTS.md` takes open-pstack's Grok and T3 Code harness sentences. It drops open-pstack's verifier, Mergify and release paragraphs, as the fork-instructions entry says.
+- **Sol rolling name.** New fork difference, described in the ledger above. The owner's sheet in `owner-sheet.test.ts` now seats `codex:sol@high` wherever it seated `codex:gpt-6.1-sol@high`.
 - **Operator prompts.** Open-pstack adds `.agents/babysit-pr.md`, `.agents/run-these.md`, `.agents/triage-backlog.md` and `.github/workflows/unfret-threads.yml`. They describe open-pstack's own live gate, Mergify queue and Unfret threads. The fork takes them unchanged, like `.mergify.yml` and `REVIEW.md`. No harness loads the prompts on its own, and the workflow's only job runs for an Unfret review, which the fork does not receive.
 
 ## Check for changes

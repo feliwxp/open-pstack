@@ -12,9 +12,13 @@ The generated [model catalog](model-catalog.md) holds the model facts: the model
 
 The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, and `default`, which passes no effort flag. A row offers `default` only when its Selectable efforts cell lists it. A row offers `ultra` only when its CLI's model entry lists that effort; for Codex, that is the model's entry in `codex`'s model list. First-run requested efforts are the Default effort cell of each row. Per spawn, the parent may move a role's effort to another effort that the row lists, under poteto-mode's Match the model to the job rule. A child never changes its assigned effort.
 
-A rolling alias, such as `opus`, names a family whose CLI resolves it to the latest available family revision. A runner receipt keeps the requested alias in `model` and the concrete provider-reported revision in `reportedModel`; verification accepts only a revision of the matching family, as the catalog's rolling-alias table gives it.
+A Claude rolling alias, such as `opus`, names a family whose CLI resolves it to the latest available family revision. A runner receipt keeps the requested alias in `model` and the concrete provider-reported revision in `reportedModel`; verification accepts only a revision of the matching family, as the catalog's rolling-alias table gives it.
 
 A descriptor whose `(provider, model)` matches no matrix row, kept predecessor, or rolling-alias revision is an unregistered pair. It runs unchanged on an external route and on Codex's native route. A Claude-native route needs a generated agent, so an unregistered Claude model on a Claude Code parent is a dropout. An unregistered Grok model on a Grok parent uses the runner like every explicit Grok descriptor. Never guess a replacement.
+
+## Sol rolling name
+
+`codex:sol` resolves at lane start. The runner reads `codex debug models` and picks the highest `gpt-<version>-sol` slug that offers the requested effort. It compares dot-separated version components as numbers, and a missing component counts as zero. If the listing fails, is not JSON, or holds no Sol slug, the runner uses the pinned fallback that the catalog's rolling-alias table in the [model catalog](model-catalog.md) names and prints `pstack-runner: sol-fallback: <reason>; using pinned <fallback>` to stderr. A readable Sol list with no slug that offers the effort ends as `unavailable-model`. The receipt keeps `model: "sol"` and records the CLI slug and whether the fallback ran in `modelResolution`. Model proof stays `pinned-argv`. A Codex parent resolves `sol` the same way before native `spawn_agent`, which takes a concrete slug. A pinned Sol slug runs unchanged and never reads the listing.
 
 ## Read-time normalization
 
@@ -103,7 +107,7 @@ pstack-runner \
   [--timeout <seconds>]
 ```
 
-Pass arguments as an argv array or quote every path. Never interpolate prompt text into a shell command. The launcher preflights the assigned CLI and authentication, invokes the model exactly once, disables recursive agents and ambient skill dispatch where the CLI supports it, restricts the built-in tool surface, and records the exact provider/model/effort flags. Each lane's preflight and model call receive the child environment in its provider's [notes](model-catalog.md#provider-notes), without the parent harness's identity markers. External lanes do not receive the parent's MCP surface. Keep MCP-dependent Why and Reflect roles on `inherit-parent` or `auto`. The launcher never falls back.
+Pass arguments as an argv array or quote every path. Never interpolate prompt text into a shell command. The launcher preflights the assigned CLI and authentication, invokes the model exactly once, disables recursive agents and ambient skill dispatch where the CLI supports it, restricts the built-in tool surface, and records the exact provider/model/effort flags. Each lane's preflight and model call receive the child environment in its provider's [notes](model-catalog.md#provider-notes), without the parent harness's identity markers. External lanes do not receive the parent's MCP surface. Keep MCP-dependent Why and Reflect roles on `inherit-parent` or `auto`. The launcher never substitutes a model except for the named pinned fallback when the Sol listing cannot be read.
 
 Every Codex lane starts with `--ignore-user-config` and `--disable apps` in both access modes. These flags remove the login's configured MCP servers and app connectors.
 

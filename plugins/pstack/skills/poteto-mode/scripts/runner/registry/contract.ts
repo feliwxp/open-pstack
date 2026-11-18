@@ -49,13 +49,18 @@ export interface Lane {
   readonly timeoutMs: number | null;
 }
 
-/** A rolling alias such as `opus`. Claude resolves it to the newest `claude-opus-<revision>`. */
-export interface RollingAlias {
-  readonly revisionPrefix: `${string}-`;
-}
+export type RollingAlias =
+  | { readonly kind: "cli"; readonly revisionPrefix: `${string}-` }
+  | {
+    readonly kind: "model-list";
+    readonly argv: readonly string[];
+    readonly versionPattern: string;
+    readonly fallbackModel: string;
+    readonly fallbackDiagnostic: string;
+  };
 
 export function isRevision(rolling: RollingAlias, model: string): boolean {
-  return model.startsWith(rolling.revisionPrefix)
+  return rolling.kind === "cli" && model.startsWith(rolling.revisionPrefix)
     && /^[0-9]+(?:-[0-9]+)*$/.test(model.slice(rolling.revisionPrefix.length));
 }
 

@@ -380,6 +380,113 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
+describe("Sol rolling runner", () => {
+  function fakeListing(stdout: string, exitCode = 0): string {
+    const calls = join(scratch, "sol-calls.jsonl");
+    writeFileSync(join(bin, "codex"), fake.replace('const stage = isPreflight ? "preflight" : "model";', `
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, claude: process.env.CLAUDECODE ?? null }) + "\\n");
+if (args[0] === "debug" && args[1] === "models") {
+  console.log(${JSON.stringify(stdout)});
+  process.exit(${exitCode});
+}
+const stage = isPreflight ? "preflight" : "model";
+`));
+    return calls;
+  }
+
+  function fixture(): string {
+    return readFileSync(join(import.meta.dir, "fixtures/codex-0.170.0/debug-models.json"), "utf8");
+  }
+
+  function calls(path: string): Array<{ args: string[]; claude: string | null }> {
+    return readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  }
+
+  it("passes the newest Sol slug as argv, keeps the alias and pinned-argv proof, and uses the preflight environment", async () => {
+    const log = fakeListing(fixture());
+    const previous = process.env.CLAUDECODE;
+    process.env.CLAUDECODE = "sol-test-parent";
+    const input = { ...options("codex"), model: "sol", effort: "high" };
+    try {
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        model: "sol", modelResolution: { model: "gpt-6.2-sol", fallbackUsed: false },
+        reportedModel: null, modelVerified: false, modelEvidence: "pinned-argv",
+      });
+      expect(calls(log).map((call) => [call.args.slice(0, 2), call.claude])).toEqual([
+        [["login", "status"], null], [["debug", "models"], null], [["exec", "--ignore-user-config"], null],
+      ]);
+      const actual = calls(log)[2]!.args;
+      expect(actual.slice(actual.indexOf("--model"), actual.indexOf("--model") + 2)).toEqual(["--model", "gpt-6.2-sol"]);
+      expect(actual).toContain('model_reasoning_effort="high"');
+      expect(result.receipt.argv.slice(1)).toEqual(actual);
+      expect(readFileSync(input.outputPath, "utf8")).toBe("CODEX_OK");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = previous;
+    }
+  });
+
+  for (const [stdout, exitCode, reason] of [
+    ["offline", 1, "model listing exited with status 1"],
+    ["not JSON", 0, "model listing was not valid JSON"],
+    ['{"models":[]}', 0, "model listing has no matching model slugs"],
+  ] as const) {
+    it(`prints one sol-fallback line and launches the pinned default: ${reason}`, async () => {
+      const log = fakeListing(stdout, exitCode);
+      const input = { ...options("codex"), model: "sol", effort: "high" };
+      const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const result = await runLane(laneOf(input));
+        expect(result.exitCode).toBe(0);
+        expect(stderr).toHaveBeenCalledTimes(1);
+        expect(stderr).toHaveBeenCalledWith(`pstack-runner: sol-fallback: ${reason}; using pinned gpt-6.2-sol\n`);
+      } finally {
+        stderr.mockRestore();
+      }
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "complete", model: "sol", modelResolution: { model: "gpt-6.2-sol", fallbackUsed: true },
+        reportedModel: null, modelVerified: false, modelEvidence: "pinned-argv",
+      });
+      expect(calls(log)[2]!.args).toEqual(expect.arrayContaining(["--model", "gpt-6.2-sol"]));
+    });
+  }
+
+  for (const model of ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]) {
+    it(`keeps pinned ${model} exact without calling debug models`, async () => {
+      const log = fakeListing(fixture());
+      const input = { ...options("codex"), model, effort: "high" };
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const observed = calls(log);
+      expect(observed.map((call) => call.args[0])).toEqual(["login", "exec"]);
+      const actual = observed[1]!.args;
+      expect(actual.slice(actual.indexOf("--model"), actual.indexOf("--model") + 2)).toEqual(["--model", model]);
+      expect(receipt(input.receiptPath)).toMatchObject({ model, modelResolution: null, reportedModel: null, modelEvidence: "pinned-argv" });
+    });
+  }
+
+  it("drops out as unavailable-model for an unsupported effort without launching or falling back", async () => {
+    const log = fakeListing(JSON.stringify({ models: [{ slug: "gpt-6.2-sol", supported_reasoning_levels: [{ effort: "low" }] }] }));
+    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+    const input = { ...options("codex"), model: "sol", effort: "high" };
+    try {
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(69);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "unavailable-model", model: "sol", modelResolution: null,
+        error: { message: expect.stringContaining("effort high") },
+      });
+      expect(calls(log).map((call) => call.args)).toEqual([["login", "status"], ["debug", "models"]]);
+      expect(stderr).not.toHaveBeenCalled();
+      expect(existsSync(input.outputPath)).toBe(false);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
 describe("Codex parent sandbox diagnostics", () => {
   let previousNetworkDisabled: string | undefined;
 

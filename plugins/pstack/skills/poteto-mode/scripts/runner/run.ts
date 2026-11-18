@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
+import { fallbackDiagnostic, pickListedModel } from "./registry/rolling.ts";
 import type { StreamFailure } from "./registry/contract.ts";
 import {
   ERROR_EVIDENCE_LIMIT,
@@ -622,13 +623,14 @@ function modelProof(
 
 function completeReceipt(
   lane: Lane,
-  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "writerSandbox" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
+  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "writerSandbox" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath" | "modelResolution"> & { readonly modelResolution?: RunnerReceipt["modelResolution"] }
 ): RunnerReceipt {
   return {
     schemaVersion: 1,
     parent: lane.parent,
     provider: lane.adapter.id,
     model: lane.model,
+    modelResolution: null,
     effort: lane.effort,
     mode: lane.access.mode,
     writerSandbox: lane.access.mode === "read-only" ? null : lane.access.sandbox,
@@ -662,6 +664,7 @@ function validateLane(lane: Lane): void {
 }
 
 interface LaneProgress {
+  modelResolution: RunnerReceipt["modelResolution"];
   executable: string | null;
   preflight: RunnerReceipt["preflight"];
   argv: readonly string[];
@@ -694,7 +697,8 @@ async function executeLane(
 
   const finishWithoutChild = (
     status: "cancelled" | "timed-out",
-    phase: string
+    phase: string,
+    run?: ProcessResult
   ): RunResult => {
     const completed = Date.now();
     const receivedSignal = status === "cancelled" ? cancellation.signal : null;
@@ -709,8 +713,9 @@ async function executeLane(
       executable,
       preflight: terminalPreflight,
       argv: [executable ?? adapter.executable, ...launchArgs],
-      exitCode: null,
-      signal: null,
+      exitCode: run?.exitCode ?? null,
+      signal: run?.signal ?? null,
+      modelResolution: progress.modelResolution,
       reportedModel: null,
       modelVerified: false,
       modelEvidence: null,
@@ -939,6 +944,56 @@ async function executeLane(
     return finishWithoutChild("timed-out", "before model execution");
   }
 
+  const rolling = lane.family?.rolling;
+  if (rolling?.kind === "model-list" && lane.model === lane.family?.model) {
+    let listing: ProcessResult;
+    try {
+      listing = await runProcess(executable, rolling.argv, lane.cwd, env, null, deadlineAt, cancellation);
+    } catch {
+      listing = {
+        exitCode: null, signal: null, stdout: "", stderr: "",
+        timedOut: false, cancelledBy: cancellation.signal, streamFailure: null,
+      };
+    }
+    if (listing.cancelledBy !== null) return finishWithoutChild("cancelled", "during model resolution", listing);
+    if (listing.timedOut) return finishWithoutChild("timed-out", "during model resolution", listing);
+    const resolution = pickListedModel(rolling, listing, lane.effort);
+    if (resolution.kind === "unavailable-model") {
+      const completed = Date.now();
+      receipt = completeReceipt(lane, {
+        status: resolution.kind,
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        executable,
+        preflight: preflightState,
+        argv: [executable, ...launchArgs],
+        exitCode: null,
+        signal: null,
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: null,
+        sessionId: null,
+        usage: null,
+        costUsd: null,
+        error: { message: resolution.message, evidence: "" },
+      });
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
+      return { exitCode: statusExitCode(receipt.status), receipt };
+    }
+    progress.modelResolution = { model: resolution.model, fallbackUsed: resolution.fallbackReason !== null };
+    if (resolution.fallbackReason !== null) {
+      process.stderr.write(`${fallbackDiagnostic(rolling, resolution.fallbackReason)}\n`);
+    }
+    lane = { ...lane, cliModel: resolution.model };
+    launchArgs = adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: providerSidecar(lane)?.facts ?? null });
+    progress.argv = [executable, ...launchArgs];
+  }
+
+  if (cancellation.signal !== null) return finishWithoutChild("cancelled", "before model execution");
+  if (deadlineAt !== null && Date.now() >= deadlineAt) return finishWithoutChild("timed-out", "before model execution");
+
   const result = await runProcess(
     executable,
     launchArgs,
@@ -952,6 +1007,7 @@ async function executeLane(
   );
   const completed = Date.now();
   const base = {
+    modelResolution: progress.modelResolution,
     startedAt,
     completedAt: new Date(completed).toISOString(),
     elapsedMs: completed - started,
@@ -1060,6 +1116,7 @@ export async function runLane(
   const deadlineAt = lane.timeoutMs === null ? null : started + lane.timeoutMs;
   const launchArgs = lane.adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: providerSidecar(lane)?.facts ?? null });
   const progress: LaneProgress = {
+    modelResolution: null,
     executable: null,
     preflight: {
       argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane, providerSidecar(lane)?.facts ?? null)],
@@ -1100,6 +1157,7 @@ export async function runLane(
         completedAt: new Date(completed).toISOString(),
         elapsedMs: completed - started,
         executable: progress.executable,
+        modelResolution: progress.modelResolution,
         preflight: terminalPreflight,
         argv: progress.argv,
         exitCode: null,

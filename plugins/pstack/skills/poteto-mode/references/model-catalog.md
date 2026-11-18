@@ -9,7 +9,7 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | Family | Label | Provider | Model | Default effort | Selectable efforts | Claude-native agents | Status | Upstream pstack choice |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | fable | Fable | claude | fable | max | low medium high xhigh max | `pstack-fable-<effort>` | optional | - |
-| sol | GPT-6.1 Sol | codex | gpt-6.1-sol | max | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
+| sol | Sol | codex | sol | max | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
 | grok | Grok 4.7 | grok | grok-4.7 | xhigh | low medium high xhigh max | - | default | grok-4.7-xhigh-fast |
 | opus | Opus | claude | opus | max | low medium high xhigh max | `pstack-opus-<effort>` | default | opus |
 | luna | GPT-6 Luna | codex | gpt-6-luna | max | low medium high xhigh max | - | optional | - |
@@ -50,7 +50,10 @@ Effort in the model ID: for these families the effort selects the CLI model, and
 
 | Provider | Kept model | Family | Current model | Selectable efforts |
 | --- | --- | --- | --- | --- |
-| codex | gpt-5.6-sol | sol | gpt-6.1-sol | low medium high xhigh max ultra |
+| codex | gpt-6.2-sol | sol | sol | low medium high xhigh max ultra |
+| codex | gpt-6.1-sol | sol | sol | low medium high xhigh max ultra |
+| codex | gpt-6-sol | sol | sol | low medium high xhigh max ultra |
+| codex | gpt-5.6-sol | sol | sol | low medium high xhigh max ultra |
 | grok | grok-4.6 | grok | grok-4.7 | low medium high xhigh max |
 
 Rolling aliases:
@@ -58,6 +61,7 @@ Rolling aliases:
 | Family | Alias | Versioned predecessor |
 | --- | --- | --- |
 | fable | `fable` | `claude-fable-<revision>`, where the revision contains only digits and hyphens |
+| sol | `sol` | Highest numeric version matching `^gpt-([0-9]+(?:\.[0-9]+)*)-sol$` from `codex debug models` that offers the requested effort; pinned fallback `gpt-6.2-sol` |
 | opus | `opus` | `claude-opus-<revision>`, where the revision contains only digits and hyphens |
 | sonnet | `sonnet` | `claude-sonnet-<revision>`, where the revision contains only digits and hyphens |
 
@@ -244,18 +248,18 @@ The complete first-run sheet. A sheet that lacks a role uses that role's line he
 Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.
 
 feature, refactoring: grok:grok-4.7@xhigh
-bug-fix: codex:gpt-6.1-sol@max
-perf-issue: codex:gpt-6.1-sol@max
-hillclimb: codex:gpt-6.1-sol@max
+bug-fix: codex:sol@max
+perf-issue: codex:sol@max
+hillclimb: codex:sol@max
 judgment and prose: claude:opus@max
 hardest tasks: claude:opus@max
 how explorer: grok:grok-4.7@xhigh
 how explainer: claude:opus@max
 why investigators, synthesizer: inherit-parent
 reflect tooling, judgment, divergent, synthesizer: inherit-parent
-arena runners: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
-arena cross-judge pool: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
+arena runners: claude:opus@max, codex:sol@max, grok:grok-4.7@xhigh
+arena cross-judge pool: claude:opus@max, codex:sol@max, grok:grok-4.7@xhigh
 swarm workers: grok:grok-4.7@xhigh
-architect runners: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
-interrogate reviewers: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
+architect runners: claude:opus@max, codex:sol@max, grok:grok-4.7@xhigh
+interrogate reviewers: claude:opus@max, codex:sol@max, grok:grok-4.7@xhigh
 ```

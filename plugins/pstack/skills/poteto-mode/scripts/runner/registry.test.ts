@@ -109,11 +109,11 @@ describe("registry data", () => {
     ]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "claude").map((entry) => [entry.name, entry.model]))
       .toEqual([["fable", "fable"], ["opus", "opus"], ["sonnet", "sonnet"], ["opus-5-5", "claude-opus-5-5"], ["haiku-5-5", "claude-haiku-5-5"]]);
-    expect(REGISTRY.families.filter((entry) => entry.rolling !== undefined)
-      .map((entry) => [entry.name, entry.rolling!.revisionPrefix]))
+    expect(REGISTRY.families.filter((entry) => entry.rolling?.kind === "cli")
+      .map((entry) => [entry.name, entry.rolling?.kind === "cli" ? entry.rolling.revisionPrefix : null]))
       .toEqual([["fable", "claude-fable-"], ["opus", "claude-opus-"], ["sonnet", "claude-sonnet-"]]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "codex").map((entry) => [entry.name, entry.model]))
-      .toEqual([["sol", "gpt-6.1-sol"], ["luna", "gpt-6-luna"], ["astra", "gpt-6-astra"]]);
+      .toEqual([["sol", "sol"], ["luna", "gpt-6-luna"], ["astra", "gpt-6-astra"]]);
     expect(REGISTRY.families.filter((entry) => effortsOf(entry).includes("ultra")).map((entry) => entry.name)).toEqual(["sol", "astra"]);
   });
 
@@ -412,7 +412,7 @@ describe("role pointers and text scans", () => {
   });
 
   it("keep versioned Claude literals in non-test code to registry/models.ts", () => {
-    const prefixes = REGISTRY.families.flatMap((entry) => entry.rolling === undefined ? [] : [escape(entry.rolling.revisionPrefix)]);
+    const prefixes = REGISTRY.families.flatMap((entry) => entry.rolling?.kind !== "cli" ? [] : [escape(entry.rolling.revisionPrefix)]);
     const literal = new RegExp(`["'\`:](?:${prefixes.join("|")})[0-9]`);
     const hits = walk(PLUGIN_ROOT, (name) => /\.(?:ts|js|mjs)$/.test(name) && !/\.test\.(?:ts|js)$/.test(name))
       .filter((path) => path !== join(RUNNER, "registry/models.ts") && literal.test(readFileSync(path, "utf8")))
@@ -440,6 +440,18 @@ describe("resolveLane", () => {
       .toThrow("effort ultra is not offered for grok:grok-4.6");
     expect(resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-5.6-sol", effort: "ultra" })).family?.name)
       .toBe("sol");
+  });
+
+  it("resolves the Sol alias as current and its pins as kept with low through ultra", () => {
+    expect(resolveModel("codex", "sol").kind).toBe("current");
+    for (const model of ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]) {
+      const match = resolveModel("codex", model);
+      expect([match.kind, match.kind === "kept" ? match.family.name : null]).toEqual(["kept", "sol"]);
+      for (const effort of EFFORTS.filter((effort) => effort !== "default")) {
+        const lane = resolveLane(request({ parent: "claude", provider: "codex", model, effort }));
+        expect([lane.model, lane.cliModel, lane.effort]).toEqual([model, model, effort]);
+      }
+    }
   });
 
   it("rejects an effort outside the global list", () => {

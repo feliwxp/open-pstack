@@ -124,7 +124,9 @@ export function renderCatalog(registry: Registry): GeneratedFile {
       registry.families.flatMap((family) => family.rolling === undefined ? [] : [[
         family.name,
         code(family.model),
-        `${code(`${family.rolling.revisionPrefix}<revision>`)}, where the revision contains only digits and hyphens`,
+        family.rolling.kind === "cli"
+          ? `${code(`${family.rolling.revisionPrefix}<revision>`)}, where the revision contains only digits and hyphens`
+          : `Highest numeric version matching ${code(family.rolling.versionPattern)} from ${code([family.provider, ...family.rolling.argv].join(" "))} that offers the requested effort; pinned fallback ${code(family.rolling.fallbackModel)}`,
       ]])
     ),
     "",

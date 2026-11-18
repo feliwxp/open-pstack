@@ -70,6 +70,10 @@ export interface RunnerReceipt {
   readonly parent: Parent;
   readonly provider: string;
   readonly model: string;
+  readonly modelResolution: {
+    readonly model: string;
+    readonly fallbackUsed: boolean;
+  } | null;
   readonly effort: Effort;
   readonly mode: AccessMode;
   /** Null for a read-only lane. */

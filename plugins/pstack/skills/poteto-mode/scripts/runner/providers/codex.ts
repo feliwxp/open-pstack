@@ -122,7 +122,7 @@ export const codex = adapter({
       "--disable",
       "apps",
       "--model",
-      lane.model,
+      lane.cliModel,
       ...effortArgs(lane, ["--config", `model_reasoning_effort=${JSON.stringify(lane.effort)}`]),
       "--sandbox",
       sandbox(lane.access),
