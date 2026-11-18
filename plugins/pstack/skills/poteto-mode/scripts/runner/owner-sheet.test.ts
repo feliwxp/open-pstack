@@ -4,21 +4,21 @@ import { join } from "node:path";
 import { effortsOf, REGISTRY, resolveModel } from "./registry/index.ts";
 
 const PLUGIN_ROOT = join(import.meta.dir, "../../../..");
-const OWNER_SHEET = `feature, refactoring: codex:gpt-6.1-sol@high
-bug-fix: codex:gpt-6.1-sol@high
-perf-issue: codex:gpt-6.1-sol@high
-hillclimb: codex:gpt-6.1-sol@high
+const OWNER_SHEET = `feature, refactoring: codex:sol@high
+bug-fix: codex:sol@high
+perf-issue: codex:sol@high
+hillclimb: codex:sol@high
 judgment and prose: claude:opus@high
 hardest tasks: claude:opus@high
-how explorer: codex:gpt-6.1-sol@high
-how explainer: codex:gpt-6.1-sol@high
+how explorer: codex:sol@high
+how explainer: codex:sol@high
 why investigators, synthesizer: inherit-parent
 reflect tooling, judgment, divergent, synthesizer: inherit-parent
-arena runners: claude:opus@high, codex:gpt-6.1-sol@high
-arena cross-judge pool: codex:gpt-6.1-sol@high, claude:opus@high
-swarm workers: codex:gpt-6.1-sol@high
-architect runners: claude:opus@high, codex:gpt-6.1-sol@high
-interrogate reviewers: claude:opus@high, codex:gpt-6.1-sol@high
+arena runners: claude:opus@high, codex:sol@high
+arena cross-judge pool: codex:sol@high, claude:opus@high
+swarm workers: codex:sol@high
+architect runners: claude:opus@high, codex:sol@high
+interrogate reviewers: claude:opus@high, codex:sol@high
 `;
 
 const ROUTED_SKILL_LINES: Record<string, string[]> = {

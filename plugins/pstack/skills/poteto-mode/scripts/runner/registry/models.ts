@@ -12,17 +12,29 @@ export const FAMILIES = [
     efforts: UP_TO_MAX,
     defaultEffort: "max",
     upstream: null,
-    rolling: { revisionPrefix: "claude-fable-" },
+    rolling: { kind: "cli", revisionPrefix: "claude-fable-" },
   }),
   family({
     name: "sol",
-    label: "GPT-6.1 Sol",
+    label: "Sol",
     provider: "codex",
-    model: "gpt-6.1-sol",
+    model: "sol",
     efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.159.0
     defaultEffort: "max",
     upstream: "gpt-5.6-sol-max",
-    predecessors: [{ model: "gpt-5.6-sol", efforts: UP_TO_ULTRA }],
+    rolling: {
+      kind: "model-list",
+      argv: ["debug", "models"],
+      versionPattern: "^gpt-([0-9]+(?:\\.[0-9]+)*)-sol$",
+      fallbackModel: "gpt-6.1-sol",
+      fallbackDiagnostic: "sol-fallback",
+    },
+    predecessors: [
+      { model: "gpt-6.2-sol", efforts: UP_TO_ULTRA },
+      { model: "gpt-6.1-sol", efforts: UP_TO_ULTRA },
+      { model: "gpt-6-sol", efforts: UP_TO_ULTRA },
+      { model: "gpt-5.6-sol", efforts: UP_TO_ULTRA },
+    ],
   }),
   family({
     name: "grok",
@@ -42,7 +54,7 @@ export const FAMILIES = [
     efforts: UP_TO_MAX,
     defaultEffort: "max",
     upstream: "opus",
-    rolling: { revisionPrefix: "claude-opus-" },
+    rolling: { kind: "cli", revisionPrefix: "claude-opus-" },
   }),
   family({
     name: "luna",
@@ -54,6 +66,15 @@ export const FAMILIES = [
     upstream: null,
   }),
   family({
+    name: "astra",
+    label: "GPT-6 Astra",
+    provider: "codex",
+    model: "gpt-6-astra",
+    efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.164.0
+    defaultEffort: "max",
+    upstream: null,
+  }),
+  family({
     name: "sonnet",
     label: "Sonnet",
     provider: "claude",
@@ -61,7 +82,7 @@ export const FAMILIES = [
     efforts: UP_TO_MAX,
     defaultEffort: "max",
     upstream: null,
-    rolling: { revisionPrefix: "claude-sonnet-" },
+    rolling: { kind: "cli", revisionPrefix: "claude-sonnet-" },
   }),
   family({
     name: "opus-5-5",
@@ -209,4 +230,8 @@ export const RELEASED_PAIRS = [
   { pair: "cursor:composer-2.5", family: "composer-2.5" },
   { pair: "cursor:gemini-3.7-flash", family: "gemini-3.7-flash" },
   { pair: "claude:claude-haiku-5-5", family: "haiku-5-5" },
+  { pair: "codex:gpt-6-astra", family: "astra" },
+  { pair: "codex:sol", family: "sol" },
+  { pair: "codex:gpt-6.2-sol", family: "sol" },
+  { pair: "codex:gpt-6-sol", family: "sol" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

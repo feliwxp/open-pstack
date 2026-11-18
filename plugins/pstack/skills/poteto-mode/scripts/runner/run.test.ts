@@ -380,6 +380,113 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
+describe("Sol rolling runner", () => {
+  function fakeListing(stdout: string, exitCode = 0): string {
+    const calls = join(scratch, "sol-calls.jsonl");
+    writeFileSync(join(bin, "codex"), fake.replace('const stage = isPreflight ? "preflight" : "model";', `
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, claude: process.env.CLAUDECODE ?? null }) + "\\n");
+if (args[0] === "debug" && args[1] === "models") {
+  console.log(${JSON.stringify(stdout)});
+  process.exit(${exitCode});
+}
+const stage = isPreflight ? "preflight" : "model";
+`));
+    return calls;
+  }
+
+  function fixture(): string {
+    return readFileSync(join(import.meta.dir, "fixtures/codex-0.170.0/debug-models.json"), "utf8");
+  }
+
+  function calls(path: string): Array<{ args: string[]; claude: string | null }> {
+    return readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  }
+
+  it("passes the newest Sol slug as argv, keeps the alias and pinned-argv proof, and uses the preflight environment", async () => {
+    const log = fakeListing(fixture());
+    const previous = process.env.CLAUDECODE;
+    process.env.CLAUDECODE = "sol-test-parent";
+    const input = { ...options("codex"), model: "sol", effort: "high" };
+    try {
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        model: "sol", modelResolution: { model: "gpt-6.2-sol", fallbackUsed: false },
+        reportedModel: null, modelVerified: false, modelEvidence: "pinned-argv",
+      });
+      expect(calls(log).map((call) => [call.args.slice(0, 2), call.claude])).toEqual([
+        [["login", "status"], null], [["debug", "models"], null], [["exec", "--ignore-user-config"], null],
+      ]);
+      const actual = calls(log)[2]!.args;
+      expect(actual.slice(actual.indexOf("--model"), actual.indexOf("--model") + 2)).toEqual(["--model", "gpt-6.2-sol"]);
+      expect(actual).toContain('model_reasoning_effort="high"');
+      expect(result.receipt.argv.slice(1)).toEqual(actual);
+      expect(readFileSync(input.outputPath, "utf8")).toBe("CODEX_OK");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = previous;
+    }
+  });
+
+  for (const [stdout, exitCode, reason] of [
+    ["offline", 1, "model listing exited with status 1"],
+    ["not JSON", 0, "model listing was not valid JSON"],
+    ['{"models":[]}', 0, "model listing has no matching model slugs"],
+  ] as const) {
+    it(`prints one sol-fallback line and launches the pinned default: ${reason}`, async () => {
+      const log = fakeListing(stdout, exitCode);
+      const input = { ...options("codex"), model: "sol", effort: "high" };
+      const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const result = await runLane(laneOf(input));
+        expect(result.exitCode).toBe(0);
+        expect(stderr).toHaveBeenCalledTimes(1);
+        expect(stderr).toHaveBeenCalledWith(`pstack-runner: sol-fallback: ${reason}; using pinned gpt-6.1-sol\n`);
+      } finally {
+        stderr.mockRestore();
+      }
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "complete", model: "sol", modelResolution: { model: "gpt-6.1-sol", fallbackUsed: true },
+        reportedModel: null, modelVerified: false, modelEvidence: "pinned-argv",
+      });
+      expect(calls(log)[2]!.args).toEqual(expect.arrayContaining(["--model", "gpt-6.1-sol"]));
+    });
+  }
+
+  for (const model of ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]) {
+    it(`keeps pinned ${model} exact without calling debug models`, async () => {
+      const log = fakeListing(fixture());
+      const input = { ...options("codex"), model, effort: "high" };
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const observed = calls(log);
+      expect(observed.map((call) => call.args[0])).toEqual(["login", "exec"]);
+      const actual = observed[1]!.args;
+      expect(actual.slice(actual.indexOf("--model"), actual.indexOf("--model") + 2)).toEqual(["--model", model]);
+      expect(receipt(input.receiptPath)).toMatchObject({ model, modelResolution: null, reportedModel: null, modelEvidence: "pinned-argv" });
+    });
+  }
+
+  it("drops out as unavailable-model for an unsupported effort without launching or falling back", async () => {
+    const log = fakeListing(JSON.stringify({ models: [{ slug: "gpt-6.2-sol", supported_reasoning_levels: [{ effort: "low" }] }] }));
+    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+    const input = { ...options("codex"), model: "sol", effort: "high" };
+    try {
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(69);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "unavailable-model", model: "sol", modelResolution: null,
+        error: { message: expect.stringContaining("effort high") },
+      });
+      expect(calls(log).map((call) => call.args)).toEqual([["login", "status"], ["debug", "models"]]);
+      expect(stderr).not.toHaveBeenCalled();
+      expect(existsSync(input.outputPath)).toBe(false);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
 describe("Codex parent sandbox diagnostics", () => {
   let previousNetworkDisabled: string | undefined;
 
@@ -2086,12 +2193,6 @@ await Bun.sleep(5_000);`);
     const input = devinOptions("devin-repo-config", { cwd: repo });
     expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
   });
-
-  it("refuses an isolated-write Devin lane before launch", () => {
-    const input = devinOptions("devin-writer", { mode: "isolated-write" });
-    expect(() => laneOf(input)).toThrow("provider devin does not support isolated-write");
-    expect(existsSync(input.receiptPath)).toBe(false);
-  });
 });
 
 const STAND_IN_CONFIG = ".agents/agents/lane.md";
@@ -2216,6 +2317,25 @@ describe("childEnvironment", () => {
       CODEX_CI: "1",
       KEEP_ME: "yes",
     });
+    const grokParent = {
+      ...source,
+      GROK_SESSION_ID: "sess",
+      GROK_AGENT: "agent",
+      GROK_HOME: "/grok",
+    };
+    expect(childEnvironment(laneOf({ ...options("claude"), parent: "grok", mode: "read-only" }), grokParent)).toEqual({
+      PATH: "/bin",
+      CODEX_THREAD_ID: "codex",
+      CODEX_CI: "1",
+      CLAUDECODE: "1",
+      CLAUDE_CODE_CHILD_SESSION: "1",
+      KEEP_ME: "yes",
+      GROK_HOME: "/grok",
+    });
+    expect(childEnvironment(laneOf({ ...options("grok"), parent: "grok", mode: "read-only" }), grokParent)).toEqual({
+      PATH: "/bin",
+      GROK_HOME: "/grok",
+    });
   });
 
   it("passes a Grok lane only allowlisted variables in both modes", () => {
@@ -2295,25 +2415,26 @@ describe("childEnvironment", () => {
     };
     const expected: Record<string, Partial<Record<AccessKind, readonly string[]>>> = {
       grok: { "read-only": ["GROK_API_KEY", "XAI_API_KEY"], "isolated-write": ["GROK_API_KEY", "XAI_API_KEY"] },
-      devin: { "read-only": [] },
-      opencode: { "read-only": [] },
-      dsh: { "read-only": ["DEEPSEEK_API_KEY"] },
-      amp: { "read-only": ["AMP_API_KEY"] },
-      agy: { "read-only": [] },
-      cursor: { "read-only": ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"] },
+      devin: { "read-only": [], "isolated-write": [], "isolated-write-full-access": [] },
+      opencode: { "read-only": [], "isolated-write-full-access": [] },
+      dsh: { "read-only": ["DEEPSEEK_API_KEY"], "isolated-write": ["DEEPSEEK_API_KEY"] },
+      amp: { "read-only": ["AMP_API_KEY"], "isolated-write-full-access": ["AMP_API_KEY"] },
+      agy: { "read-only": [], "isolated-write-full-access": [] },
+      cursor: { "read-only": ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"], "isolated-write-full-access": ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"] },
+      muse: { "read-only": [], "isolated-write-full-access": [] },
     };
     const allowlisted = REGISTRY.adapters
       .filter((adapter) => adapter.environment(access("read-only"), "/sidecar").kind === "allowlist");
     expect(allowlisted.map((adapter) => adapter.id).sort()).toEqual(Object.keys(expected).sort());
     for (const adapter of allowlisted) {
-      const family = REGISTRY.families.find((entry) => entry.provider === adapter.id)!;
+      const family = REGISTRY.families.find((entry) => entry.provider === adapter.id);
       expect(Object.keys(expected[adapter.id]!)).toEqual([...adapter.launch.supports]);
       for (const kind of adapter.launch.supports) {
         const lane = laneOf({
           ...options("grok", `allowlist-${adapter.id}-${kind}`),
           provider: adapter.id,
-          model: family.model,
-          effort: family.defaultEffort,
+          model: family?.model ?? "unregistered-model",
+          effort: family?.defaultEffort ?? "default",
           mode: kind === "read-only" ? "read-only" : "isolated-write",
           ...(kind === "isolated-write-full-access" ? { writerSandbox: "full-access" } : {}),
         });
@@ -2564,7 +2685,7 @@ describe("dsh lanes", () => {
   const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
   const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
 
-  function fakeDsh(status: string, turn: string, version = "0.2.0-rc.2"): void {
+  function fakeDsh(status: string, turn: string, version = "0.2.1-rc.2"): void {
     writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -2592,7 +2713,7 @@ ${turn}
 
   const OBSERVE = `const observed = {
   prompt,
-  patch: [["- id: sandbox-policy", 4], ["- id: credentials", 3], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
+  patch: [["- id: sandbox-policy", 4], ["- id: credentials", 4], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
     const lines = readFileSync(patch, "utf8").split("\\n");
     return lines.slice(lines.indexOf(row), lines.indexOf(row) + count);
   }),
@@ -2647,6 +2768,7 @@ emit({ type: "final", text: JSON.stringify(observed) });`;
         "    mode: read-only",
         `    workspaceRoot: ${JSON.stringify(scratch)}`,
         "- id: credentials",
+        "  disabled: false",
         "  config:",
         `    path: ${JSON.stringify(join(resolve("DSH_HOME-value"), ".credentials.yaml"))}`,
         "- id: agent-default-model",
@@ -2729,7 +2851,7 @@ process.exit(130);`);
       status: "unavailable-cli",
       preflight: { status: "not-run" },
       error: {
-        message: "dsh 0.3.0 is not the measured 0.2.0-rc.2; the adapter must be re-measured before it runs this version",
+        message: "dsh 0.3.0 is not the measured 0.2.1-rc.2; the adapter must be re-measured before it runs this version",
         evidence: "0.3.0",
       },
     });
@@ -2751,12 +2873,6 @@ process.exit(130);`);
     writeFileSync(join(cwd, ".env"), "PSTACK_FIXTURE=1\n");
     const input = dshOptions("dsh-cwd-env", { cwd });
     expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
-  });
-
-  it("refuses an isolated-write dsh lane before launch", () => {
-    const input = dshOptions("dsh-writer", { mode: "isolated-write" });
-    expect(() => laneOf(input)).toThrow("provider dsh does not support isolated-write");
-    expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
 
@@ -2989,7 +3105,7 @@ result({ response: JSON.stringify(observed) + "\\n" });`;
       const dir = `${input.receiptPath}.provider`;
       expect(saved.argv.slice(1)).toEqual([
         "--input-format", "stream-json", "--output-format", "stream-json", "--model", cliModel,
-        "--add-dir", dir, "--agent", "pstack-read-only",
+        "--add-dir", dir, "--agent", "pstack-lane",
       ]);
       expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
         model: cliModel,
